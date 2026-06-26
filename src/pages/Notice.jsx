@@ -105,7 +105,7 @@ export default function Notice() {
       <div className="notice-left">
         {/* Header */}
         <div className="notice-header">
-          <h1 className="page-title">Notice Board</h1>
+          <h1 className="page-title">Tableau d’annonces</h1>
           <div className="notice-header-actions">
             <div className="notice-search-box">
               <svg
@@ -121,7 +121,7 @@ export default function Notice() {
               </svg>
               <input
                 className="notice-search-input"
-                placeholder="Search by Title or Author"
+                placeholder="Rechercher par titre ou auteur"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
               />
@@ -239,7 +239,7 @@ export default function Notice() {
           </div>
 
           <div className="notice-detail-tags-section">
-            <p className="notice-tags-label">Tag</p>
+            <p className="notice-tags-label">Étiquette</p>
             <div className="notice-tags">
               {selected.tags.map((tag) => {
                 const c = TAG_COLORS[tag] || {

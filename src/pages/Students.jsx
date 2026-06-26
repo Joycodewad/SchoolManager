@@ -285,13 +285,13 @@ export default function Teachers() {
     <div className="content-inner">
       {/* Header */}
       <div className="page-header">
-        <h1 className="page-title">All Students</h1>
+        <h1 className="page-title">Tous les élèves</h1>
         <div className="page-header-actions">
           <button
             className="btn-primary"
             onClick={() => navigate("/teachers/add")}
           >
-            Add Students
+            Ajouter des élèves
           </button>
         </div>
       </div>
@@ -299,7 +299,7 @@ export default function Teachers() {
       {/* Toolbar */}
       <div className="toolbar">
         <button className="btn-filter">
-          Add filter
+          Ajouter un filtre
           <svg
             width="14"
             height="14"
@@ -326,7 +326,7 @@ export default function Teachers() {
           <input
             className="search-input"
             type="text"
-            placeholder="Search for a students by name or email"
+            placeholder="Rechercher un élève par nom ou courriel"
             value={search}
             onChange={(e) => {
               setSearch(e.target.value);
@@ -339,7 +339,7 @@ export default function Teachers() {
       {/* Table */}
       {filtered.length === 0 ? (
         <div className="empty-state">
-          <p className="empty-title">No Students at this time</p>
+          <p className="empty-title">Aucun élève pour le moment</p>
           <p className="empty-sub">
             Students will appear here after they enroll in your school.
           </p>
@@ -349,12 +349,12 @@ export default function Teachers() {
           <table className="teachers-table">
             <thead>
               <tr>
-                <th>Name</th>
-                <th>Email</th>
-                <th>Class</th>
-                <th>Dob</th>
-                <th>Phone</th>
-                <th>Gender</th>
+                <th>Nom</th>
+                <th>Courriel</th>
+                <th>Classe</th>
+                <th>Date de naissance</th>
+                <th>Téléphone</th>
+                <th>Genre</th>
                 <th>Adresse</th>
                 <th>Actions</th>
               </tr>
@@ -391,20 +391,20 @@ export default function Teachers() {
                       <div className="actions-cell">
                         <button
                           className="action-btn view-btn"
-                          title="View details"
+                          title="Voir les détails"
                           onClick={() => navigate(`/teachers/${t.id}`)}
                         >
                           <Visibility fontSize="small" />
                         </button>
                         <button
                           className="action-btn edit-btn"
-                          title="Edit teacher"
+                          title="Modifier l’élève"
                         >
                           <Edit fontSize="small" />
                         </button>
                         <button
                           className="action-btn delete-btn"
-                          title="Delete teacher"
+                          title="Supprimer l’élève"
                         >
                           <Delete fontSize="small" />
                         </button>

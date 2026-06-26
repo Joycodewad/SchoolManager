@@ -264,7 +264,7 @@ export default function Messages() {
             </svg>
             <input
               className="msg-search-input"
-              placeholder="Search"
+              placeholder="Rechercher"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />
@@ -421,7 +421,7 @@ export default function Messages() {
         <div className="msg-input-bar">
           <input
             className="msg-input"
-            placeholder="Type a message..."
+            placeholder="Écrire un message…"
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && sendMessage()}
@@ -457,7 +457,7 @@ export default function Messages() {
       {/* ── Right panel — group info ── */}
       <div className="msg-right">
         <div className="msg-right-header">
-          <span className="msg-right-title">Group info</span>
+          <span className="msg-right-title">Informations du groupe</span>
           <div style={{ display: "flex", gap: 8 }}>
             <button className="msg-icon-btn">
               <svg
@@ -540,7 +540,7 @@ export default function Messages() {
               </svg>
               Members
             </div>
-            <button className="msg-view-all">View All</button>
+            <button className="msg-view-all">Tout voir</button>
           </div>
           <div className="msg-members-list">
             {MEMBERS.map((m, i) => (
@@ -576,11 +576,11 @@ export default function Messages() {
               </svg>
               Attachment
             </div>
-            <button className="msg-view-all">View All</button>
+            <button className="msg-view-all">Tout voir</button>
           </div>
           <div className="msg-attach-tabs">
-            <button className="msg-attach-tab active">Media • 34</button>
-            <button className="msg-attach-tab">Files • 12</button>
+            <button className="msg-attach-tab active">Médias • 34</button>
+            <button className="msg-attach-tab">Fichiers • 12</button>
           </div>
           <div className="msg-attach-grid">
             {[

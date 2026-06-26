@@ -180,7 +180,7 @@ export default function Library() {
     <div className="content-inner full-width">
       {/* Header */}
       <div className="page-header" style={{ marginBottom: 20 }}>
-        <h1 className="page-title">All Books</h1>
+        <h1 className="page-title">Tous les livres</h1>
         <div className="lib-header-actions">
           <div className="lib-search-box">
             <svg
@@ -196,7 +196,7 @@ export default function Library() {
             </svg>
             <input
               className="lib-search-input"
-              placeholder="Search by ID, Name or Subject"
+              placeholder="Rechercher par identifiant, nom ou matière"
               value={search}
               onChange={(e) => handleSearch(e.target.value)}
             />
@@ -246,13 +246,13 @@ export default function Library() {
                   onChange={toggleAll}
                 />
               </th>
-              <th>Book ID</th>
-              <th>Book Name</th>
-              <th>Writer</th>
-              <th>Subject</th>
-              <th>Class(es)</th>
-              <th>Publish Date</th>
-              <th>Status</th>
+              <th>Identifiant</th>
+              <th>Titre du livre</th>
+              <th>Auteur</th>
+              <th>Matière</th>
+              <th>Classe(s)</th>
+              <th>Date de publication</th>
+              <th>Statut</th>
             </tr>
           </thead>
           <tbody>

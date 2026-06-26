@@ -28,7 +28,7 @@ export default function TeacherDetail() {
 
   if (!teacher) return (
     <div className="content-inner">
-      <p>Teacher introuvable.</p>
+      <p>Enseignant introuvable.</p>
       <button className="btn-primary" onClick={() => navigate("/teachers")}>Retour</button>
     </div>
   );
@@ -46,11 +46,11 @@ export default function TeacherDetail() {
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
             <path d="M19 12H5M12 5l-7 7 7 7" />
           </svg>
-          Teachers
+          Enseignants
         </button>
         <div className="page-header-actions">
-          <button className="btn-export">Export CSV</button>
-          <button className="btn-primary" onClick={() => navigate("/teachers/add")}>Add Teachers</button>
+          <button className="btn-export">Exporter en CSV</button>
+          <button className="btn-primary" onClick={() => navigate("/teachers/add")}>Ajouter des enseignants</button>
         </div>
       </div>
 
@@ -79,7 +79,7 @@ export default function TeacherDetail() {
                 <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 12 19.79 19.79 0 0 1 1.61 3.37 2 2 0 0 1 3.6 1.18h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 8.75a16 16 0 0 0 5.34 5.34l.95-.95a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 21 16.92z" />
               </svg>
             </button>
-            <button className="detail-icon-btn" title="Email">
+            <button className="detail-icon-btn" title="Courriel">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#374151" strokeWidth="1.8">
                 <rect x="2" y="4" width="20" height="16" rx="2" />
                 <path d="M2 7l10 7 10-7" />
@@ -90,22 +90,22 @@ export default function TeacherDetail() {
 
         {/* Right — info */}
         <div className="detail-right">
-          <h3 className="detail-section-title">About</h3>
+          <h3 className="detail-section-title">À propos</h3>
           <p className="detail-about">{teacher.about}</p>
 
           <div className="detail-meta">
             <div>
-              <p className="detail-meta-label">Age</p>
+              <p className="detail-meta-label">Âge</p>
               <p className="detail-meta-value">{teacher.age}</p>
             </div>
             <div>
-              <p className="detail-meta-label">Gender</p>
+              <p className="detail-meta-label">Genre</p>
               <p className="detail-meta-value">{teacher.gender}</p>
             </div>
           </div>
 
           <div className="detail-same-class">
-            <p className="detail-section-title">Teachers from the same class</p>
+            <p className="detail-section-title">Enseignants de la même classe</p>
             <div className="same-class-avatars">
               {sameClass.slice(0, 4).map((t, i) => {
                 const ti  = TEACHERS.findIndex(x => x.id === t.id);
@@ -123,7 +123,7 @@ export default function TeacherDetail() {
                 );
               })}
               {sameClass.length > 4 && (
-                <span className="same-class-more">+{sameClass.length - 4} more</span>
+                <span className="same-class-more">+{sameClass.length - 4} autres</span>
               )}
             </div>
           </div>

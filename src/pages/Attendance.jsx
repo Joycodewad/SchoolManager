@@ -79,7 +79,7 @@ export default function Attendance() {
 
       {/* Header */}
       <div className="page-header" style={{ marginBottom: 24 }}>
-        <h1 className="page-title">Attendance</h1>
+        <h1 className="page-title">Présences</h1>
         <div className="att-filters">
           {/* Month */}
           <div className="att-select-wrap">
@@ -106,7 +106,7 @@ export default function Attendance() {
         <table className="att-table">
           <thead>
             <tr>
-              <th className="att-th-name">Student Name</th>
+              <th className="att-th-name">Nom de l’élève</th>
               {days.map(d => (
                 <th key={d} className="att-th-day">{String(d).padStart(2,"0")}</th>
               ))}

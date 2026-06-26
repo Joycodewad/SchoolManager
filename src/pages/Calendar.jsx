@@ -26,10 +26,10 @@ const EVENT_COLORS = {
 };
 
 const AGENDA_CATEGORIES = [
-  { label: "Big Day and Celebration Day", color: "purple" },
-  { label: "Subject Presentation & Exam", color: "pink" },
-  { label: "Fair, Exhibition & Performance", color: "blue" },
-  { label: "Official Meeting", color: "yellow" },
+  { label: "Journée spéciale et célébration", color: "purple" },
+  { label: "Présentation de matière et examen", color: "pink" },
+  { label: "Foire, exposition et spectacle", color: "blue" },
+  { label: "Réunion officielle", color: "yellow" },
 ];
 
 // All events keyed by "YYYY-M-D"
@@ -363,7 +363,7 @@ export default function Calendar() {
         {/* Agenda legend */}
         <div className="cal-sidebar-card">
           <div className="cal-sidebar-header">
-            <span className="cal-sidebar-title">Agenda</span>
+            <span className="cal-sidebar-title">Ordre du jour</span>
             <span className="cal-dots">···</span>
           </div>
           <div className="cal-agenda-list">

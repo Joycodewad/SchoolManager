@@ -40,7 +40,7 @@ export default function TopBanner() {
           <input
             className="topbar-search-input"
             type="text"
-            placeholder="Search"
+            placeholder="Rechercher"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
@@ -85,7 +85,7 @@ export default function TopBanner() {
           <div className="topbar-user">
             <div className="topbar-user-info">
               <span className="topbar-user-name">{fullName}</span>
-              <span className="topbar-user-role">Admin</span>
+              <span className="topbar-user-role">Administrateur</span>
             </div>
             <div
               className="topbar-avatar"

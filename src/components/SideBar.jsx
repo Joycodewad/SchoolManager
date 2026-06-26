@@ -5,7 +5,7 @@ import { useState } from "react";
 const MENU = [
   {
     path: "/dashboard",
-    label: "Dashboard",
+    label: "Tableau de bord",
     icon: (
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
         <path d="M3 9.5L12 3l9 6.5V20a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9.5z"/>
@@ -15,7 +15,7 @@ const MENU = [
   },
   {
     path: "/teachers",
-    label: "Teachers",
+    label: "Enseignants",
     icon: (
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
         <path d="M12 3L2 8l10 5 10-5-10-5z"/>
@@ -25,7 +25,7 @@ const MENU = [
   },
   {
     path: "/students",
-    label: "Students",
+    label: "Élèves",
     icon: (
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
         <circle cx="9" cy="7" r="4"/>
@@ -37,7 +37,7 @@ const MENU = [
   },
   {
     path: "/attendance",
-    label: "Attendance",
+    label: "Présences",
     icon: (
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
         <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
@@ -57,13 +57,13 @@ const MENU = [
       </svg>
     ),
     children: [
-      { path: "/finance/fees",     label: "Fees Collection" },
-      { path: "/finance/expenses", label: "School Expenses" },
+      { path: "/finance/fees",     label: "Collecte des frais" },
+      { path: "/finance/expenses", label: "Dépenses scolaires" },
     ],
   },
   {
     path: "/notice",
-    label: "Notice",
+    label: "Annonces",
     icon: (
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
         <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
@@ -73,7 +73,7 @@ const MENU = [
   },
   {
     path: "/calendar",
-    label: "Calendar",
+    label: "Calendrier",
     icon: (
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
         <rect x="3" y="4" width="18" height="18" rx="2"/>
@@ -83,7 +83,7 @@ const MENU = [
   },
   {
     path: "/library",
-    label: "Library",
+    label: "Bibliothèque",
     icon: (
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
         <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
@@ -105,7 +105,7 @@ const MENU = [
 const OTHER = [
   {
     path: "/profile",
-    label: "Profile",
+    label: "Profil",
     icon: (
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
         <circle cx="12" cy="8" r="4"/>
@@ -115,7 +115,7 @@ const OTHER = [
   },
   {
     path: "/settings",
-    label: "Setting",
+    label: "Paramètres",
     icon: (
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
         <circle cx="12" cy="12" r="3"/>
@@ -140,7 +140,7 @@ export default function Sidebar() {
       {/* Logo */}
       <div className="sidebar-logo">
         <div className="sidebar-logo-icon"><span>M</span></div>
-        <span className="sidebar-school-name">Udemy Inter. school</span>
+        <span className="sidebar-school-name">École internationale Udemy</span>
       </div>
 
       <div className="sidebar-scroll">
@@ -200,7 +200,7 @@ export default function Sidebar() {
         </nav>
 
         {/* OTHER */}
-        <p className="sidebar-section-label" style={{ marginTop: 24 }}>OTHER</p>
+        <p className="sidebar-section-label" style={{ marginTop: 24 }}>AUTRES</p>
         <nav className="sidebar-nav">
           {OTHER.map((item) => (
             <NavLink
@@ -224,7 +224,7 @@ export default function Sidebar() {
                 <line x1="21" y1="12" x2="9" y2="12"/>
               </svg>
             </span>
-            <span className="nav-label">Log out</span>
+            <span className="nav-label">Se déconnecter</span>
           </button>
         </nav>
       </div>

@@ -2,24 +2,24 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 const SUBJECTS = [
-  "Math",
-  "Science",
-  "English",
-  "History",
-  "Geography",
+  "Mathématiques",
+  "Sciences",
+  "Anglais",
+  "Histoire",
+  "Géographie",
   "Art",
-  "Music",
-  "PE",
+  "Musique",
+  "Éducation physique",
 ];
 const CLASSES = [
-  "Class 1",
-  "Class 2",
-  "Class 3",
-  "Class 4",
-  "Class 5",
-  "Class 6",
+  "Classe 1",
+  "Classe 2",
+  "Classe 3",
+  "Classe 4",
+  "Classe 5",
+  "Classe 6",
 ];
-const GENDERS = ["Male", "Female", "Other"];
+const GENDERS = ["Homme", "Femme", "Autre"];
 
 const emptyTeacher = () => ({
   fullName: "",
@@ -53,9 +53,9 @@ export default function AddTeacher() {
     <div className="content-inner">
       {/* Header row */}
       <div className="add-teacher-header">
-        <h1 className="page-title">Add Teachers</h1>
+        <h1 className="page-title">Ajouter des enseignants</h1>
         <div className="add-teacher-designation">
-          <label className="form-label">Designation</label>
+          <label className="form-label">Fonction</label>
           <input
             className="form-input"
             type="text"
@@ -71,13 +71,13 @@ export default function AddTeacher() {
           className={`tab-btn${tab === "manual" ? " tab-active" : ""}`}
           onClick={() => setTab("manual")}
         >
-          Manually
+          Manuellement
         </button>
         <button
           className={`tab-btn${tab === "csv" ? " tab-active" : ""}`}
           onClick={() => setTab("csv")}
         >
-          Import CSV
+          Importer un CSV
         </button>
       </div>
 
@@ -87,7 +87,7 @@ export default function AddTeacher() {
             <div key={i} className="teacher-form-row">
               {/* Full Name */}
               <div className="form-group full-width">
-                <label className="form-label">Full Name</label>
+                <label className="form-label">Nom complet</label>
                 <input
                   className="form-input"
                   type="text"
@@ -99,7 +99,7 @@ export default function AddTeacher() {
               {/* Email + Class + Gender */}
               <div className="form-row-3">
                 <div className="form-group">
-                  <label className="form-label">Email address</label>
+                  <label className="form-label">Adresse courriel</label>
                   <input
                     className="form-input"
                     type="email"
@@ -113,7 +113,7 @@ export default function AddTeacher() {
                     value={t.class}
                     onChange={(e) => update(i, "class", e.target.value)}
                   >
-                    <option value="">Class</option>
+                    <option value="">Classe</option>
                     {CLASSES.map((c) => (
                       <option key={c} value={c}>
                         {c}
@@ -127,7 +127,7 @@ export default function AddTeacher() {
                     value={t.gender}
                     onChange={(e) => update(i, "gender", e.target.value)}
                   >
-                    <option value="">Gender</option>
+                    <option value="">Genre</option>
                     {GENDERS.map((g) => (
                       <option key={g} value={g}>
                         {g}
@@ -140,7 +140,7 @@ export default function AddTeacher() {
               {/* Password + Phone */}
               <div className="form-row-2">
                 <div className="form-group">
-                  <label className="form-label">Password</label>
+                  <label className="form-label">Mot de passe</label>
                   <input
                     className="form-input"
                     type="password"
@@ -149,7 +149,7 @@ export default function AddTeacher() {
                   />
                 </div>
                 <div className="form-group">
-                  <label className="form-label">Phone number</label>
+                  <label className="form-label">Numéro de téléphone</label>
                   <input
                     className="form-input"
                     type="tel"
@@ -166,7 +166,7 @@ export default function AddTeacher() {
                   value={t.subject}
                   onChange={(e) => update(i, "subject", e.target.value)}
                 >
-                  <option value="">Subject</option>
+                  <option value="">Matière</option>
                   {SUBJECTS.map((s) => (
                     <option key={s} value={s}>
                       {s}
@@ -191,10 +191,10 @@ export default function AddTeacher() {
                 <circle cx="12" cy="12" r="10" />
                 <path d="M12 8v8M8 12h8" />
               </svg>
-              Add another
+              En ajouter un autre
             </button>
             <button className="btn-primary" onClick={handleSubmit}>
-              Add Teacher
+              Ajouter l’enseignant
             </button>
           </div>
         </div>

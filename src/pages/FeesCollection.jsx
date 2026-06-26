@@ -102,7 +102,7 @@ export default function FeesCollection() {
         {/* Area chart */}
         <div className="fc-chart-card">
           <div className="fc-chart-header">
-            <span className="fc-chart-title">Fees Collection</span>
+            <span className="fc-chart-title">Collecte des frais</span>
             <span className="fc-dots">···</span>
           </div>
           <ResponsiveContainer width="100%" height={200}>
@@ -144,14 +144,14 @@ export default function FeesCollection() {
 
         {/* Table header */}
         <div className="fc-table-header">
-          <span className="fc-chart-title">Fees Collection</span>
+          <span className="fc-chart-title">Collecte des frais</span>
           <div className="fc-table-controls">
             {/* Search */}
             <div className="fc-search-box">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" strokeWidth="2">
                 <circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/>
               </svg>
-              <input className="fc-search-input" placeholder="Search by Name or ID" value={search} onChange={e => handleSearch(e.target.value)}/>
+              <input className="fc-search-input" placeholder="Rechercher par nom ou identifiant" value={search} onChange={e => handleSearch(e.target.value)}/>
             </div>
             {/* Date */}
             <div className="fc-filter-btn">
@@ -182,13 +182,13 @@ export default function FeesCollection() {
                     checked={selected.size===paginated.length && paginated.length>0}
                     onChange={toggleAll}/>
                 </th>
-                <th>Student Name</th>
-                <th>Class</th>
-                <th>Tuition Fee</th>
-                <th>Activities Fee</th>
-                <th>Miscellaneous</th>
-                <th>Amount</th>
-                <th>Status</th>
+                <th>Nom de l’élève</th>
+                <th>Classe</th>
+                <th>Frais de scolarité</th>
+                <th>Frais d’activités</th>
+                <th>Divers</th>
+                <th>Montant</th>
+                <th>Statut</th>
                 <th>Action</th>
               </tr>
             </thead>
@@ -221,13 +221,13 @@ export default function FeesCollection() {
                     </td>
                     <td>
                       <div className="fc-actions">
-                        <button className="fc-action-btn" title="Edit">
+                        <button className="fc-action-btn" title="Modifier">
                           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" strokeWidth="2">
                             <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
                             <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
                           </svg>
                         </button>
-                        <button className="fc-action-btn" title="Delete">
+                        <button className="fc-action-btn" title="Supprimer">
                           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" strokeWidth="2">
                             <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/>
                             <path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/>
@@ -247,7 +247,7 @@ export default function FeesCollection() {
           <div className="pagination" style={{marginTop:16}}>
             <button className="pag-btn" onClick={()=>setPage(p=>Math.max(1,p-1))} disabled={page===1}>← Previous</button>
             <span className="pag-info">Page {page} of {totalPages}</span>
-            <button className="pag-btn" onClick={()=>setPage(p=>Math.min(totalPages,p+1))} disabled={page===totalPages}>Next →</button>
+            <button className="pag-btn" onClick={()=>setPage(p=>Math.min(totalPages,p+1))} disabled={page===totalPages}>Suivant →</button>
           </div>
         )}
       </div>

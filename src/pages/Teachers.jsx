@@ -214,14 +214,14 @@ export default function Teachers() {
     <div className="content-inner">
       {/* Header */}
       <div className="page-header">
-        <h1 className="page-title">Teachers</h1>
+        <h1 className="page-title">Enseignants</h1>
         <div className="page-header-actions">
-          <button className="btn-export">Export CSV</button>
+          <button className="btn-export">Exporter en CSV</button>
           <button
             className="btn-primary"
             onClick={() => navigate("/teachers/add")}
           >
-            Add Teachers
+            Ajouter des enseignants
           </button>
         </div>
       </div>
@@ -229,7 +229,7 @@ export default function Teachers() {
       {/* Toolbar */}
       <div className="toolbar">
         <button className="btn-filter">
-          Add filter
+          Ajouter un filtre
           <svg
             width="14"
             height="14"
@@ -256,7 +256,7 @@ export default function Teachers() {
           <input
             className="search-input"
             type="text"
-            placeholder="Search for a teachers by name or email"
+            placeholder="Rechercher un enseignant par nom ou courriel"
             value={search}
             onChange={(e) => {
               setSearch(e.target.value);
@@ -269,9 +269,9 @@ export default function Teachers() {
       {/* Table */}
       {filtered.length === 0 ? (
         <div className="empty-state">
-          <p className="empty-title">No Teachers at this time</p>
+          <p className="empty-title">Aucun enseignant pour le moment</p>
           <p className="empty-sub">
-            Teachers will appear here after they enroll in your school.
+            Les enseignants apparaîtront ici après leur inscription à votre école.
           </p>
         </div>
       ) : (
@@ -279,11 +279,11 @@ export default function Teachers() {
           <table className="teachers-table">
             <thead>
               <tr>
-                <th>Name</th>
-                <th>Subject</th>
-                <th>Class</th>
-                <th>Email address</th>
-                <th>Gender</th>
+                <th>Nom</th>
+                <th>Matière</th>
+                <th>Classe</th>
+                <th>Adresse courriel</th>
+                <th>Genre</th>
                 <th>Actions</th>
               </tr>
             </thead>
@@ -312,20 +312,20 @@ export default function Teachers() {
                       <div className="actions-cell">
                         <button
                           className="action-btn view-btn"
-                          title="View details"
+                          title="Voir les détails"
                           onClick={() => navigate(`/teachers/${t.id}`)}
                         >
                           <Visibility fontSize="small" />
                         </button>
                         <button
                           className="action-btn edit-btn"
-                          title="Edit teacher"
+                          title="Modifier l’enseignant"
                         >
                           <Edit fontSize="small" />
                         </button>
                         <button
                           className="action-btn delete-btn"
-                          title="Delete teacher"
+                          title="Supprimer l’enseignant"
                         >
                           <Delete fontSize="small" />
                         </button>

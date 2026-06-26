@@ -6,10 +6,10 @@ import {
 
 // ── Données ──────────────────────────────────────────────────────────
 const STATS = [
-  { label: "Students", value: "124,684", trend: "+15%", up: true,  color: "#e8e4ff", accent: "#6c5ce7" },
-  { label: "Teachers",  value: "12,379",  trend: "-3%",  up: false, color: "#fff8dc", accent: "#f0b429" },
-  { label: "Staffs",    value: "29,300",  trend: "-3%",  up: false, color: "#e8e4ff", accent: "#6c5ce7" },
-  { label: "Awards",    value: "95,800",  trend: "+5%",  up: true,  color: "#fff8dc", accent: "#f0b429" },
+  { label: "Élèves", value: "124,684", trend: "+15%", up: true,  color: "#e8e4ff", accent: "#6c5ce7" },
+  { label: "Enseignants",  value: "12,379",  trend: "-3%",  up: false, color: "#fff8dc", accent: "#f0b429" },
+  { label: "Personnel",    value: "29,300",  trend: "-3%",  up: false, color: "#e8e4ff", accent: "#6c5ce7" },
+  { label: "Récompenses",    value: "95,800",  trend: "+5%",  up: true,  color: "#fff8dc", accent: "#f0b429" },
 ];
 
 const ATTENDANCE = [
@@ -78,7 +78,7 @@ function AttTooltip({ active, payload, label }) {
   return (
     <div style={{ background: "#1e3a5f", color: "white", borderRadius: 10, padding: "10px 16px", fontSize: 13, boxShadow: "0 4px 16px rgba(0,0,0,0.2)" }}>
       <div style={{ fontWeight: 700, marginBottom: 4 }}>{payload[0]?.value}%</div>
-      <div style={{ opacity: 0.8 }}>Present</div>
+      <div style={{ opacity: 0.8 }}>Présents</div>
     </div>
   );
 }
@@ -125,7 +125,7 @@ export default function Dashboard() {
         {/* Students donut */}
         <div className="db-card db-students">
           <div className="db-card-header">
-            <span className="db-card-title">Students</span>
+            <span className="db-card-title">Élèves</span>
             <span className="db-dots">···</span>
           </div>
           <div className="db-donut-wrap">
@@ -136,14 +136,14 @@ export default function Dashboard() {
               <span className="db-legend-dot" style={{ background: "#f0b429" }} />
               <div>
                 <div className="db-legend-val">45.414</div>
-                <div className="db-legend-sub">Boys (47%)</div>
+                <div className="db-legend-sub">Garçons (47 %)</div>
               </div>
             </div>
             <div className="db-legend-item">
               <span className="db-legend-dot" style={{ background: "#bde0fe" }} />
               <div>
                 <div className="db-legend-val">40.270</div>
-                <div className="db-legend-sub">Girls (53%)</div>
+                <div className="db-legend-sub">Filles (53 %)</div>
               </div>
             </div>
           </div>
@@ -152,21 +152,21 @@ export default function Dashboard() {
         {/* Attendance chart */}
         <div className="db-card db-attendance">
           <div className="db-card-header">
-            <span className="db-card-title">Attendance</span>
+            <span className="db-card-title">Présences</span>
             <div style={{ display: "flex", gap: 8 }}>
               <select className="db-select">
-                <option>Weekly</option><option>Monthly</option>
+                <option>Hebdomadaire</option><option>Mensuel</option>
               </select>
               <select className="db-select">
-                <option>Grade 3</option><option>Grade 4</option><option>Grade 5</option>
+                <option>Classe 3</option><option>Classe 4</option><option>Classe 5</option>
               </select>
             </div>
           </div>
           <div className="db-legend-row">
             <span className="db-legend-dot" style={{ background: "#f0b429" }} />
-            <span className="db-legend-text">Total Present</span>
+            <span className="db-legend-text">Total des présents</span>
             <span className="db-legend-dot" style={{ background: "#bde0fe" }} />
-            <span className="db-legend-text">Total Absent</span>
+            <span className="db-legend-text">Total des absents</span>
           </div>
           <ResponsiveContainer width="100%" height={220}>
             <BarChart data={ATTENDANCE} barGap={4} barCategoryGap="30%">
@@ -230,7 +230,7 @@ export default function Dashboard() {
       <div className="db-card db-messages">
         <div className="db-card-header">
           <span className="db-card-title">Messages</span>
-          <button className="db-view-all">View All</button>
+          <button className="db-view-all">Tout voir</button>
         </div>
         <div className="db-msg-list">
           {MESSAGES.map((m, i) => (
