@@ -1,0 +1,172 @@
+/* ══════════════════════════════════════
+   Library
+══════════════════════════════════════ */
+
+/* ── Header actions ── */
+.lib-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.lib-search-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 20px;
+  padding: 8px 16px;
+  width: 240px;
+  transition: border-color 0.15s;
+}
+.lib-search-box:focus-within {
+  border-color: #2563eb;
+}
+
+.lib-search-input {
+  border: none;
+  background: transparent;
+  outline: none;
+  font-size: 13px;
+  color: #374151;
+  width: 100%;
+}
+.lib-search-input::placeholder {
+  color: #9ca3af;
+}
+
+.lib-icon-btn {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: opacity 0.15s;
+  flex-shrink: 0;
+}
+.lib-icon-btn:hover {
+  opacity: 0.85;
+}
+
+.lib-filter-btn {
+  background: #f0b429;
+}
+.lib-add-btn {
+  background: #f0b429;
+}
+
+/* ── Table ── */
+.lib-table-wrap {
+  border: 1px solid #e5e7eb;
+  border-radius: 14px;
+  overflow: hidden;
+  background: white;
+}
+
+.lib-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.lib-table thead tr {
+  background: #f0f9ff;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.lib-table th {
+  text-align: left;
+  padding: 13px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #0ea5e9;
+  white-space: nowrap;
+}
+
+.lib-table th:first-child {
+  color: #374151;
+}
+
+.lib-table td {
+  padding: 14px 16px;
+  border-bottom: 1px solid #f1f3f7;
+  vertical-align: middle;
+}
+
+.lib-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.lib-table tbody tr:hover td {
+  background: #f8fafc;
+  transition: background 0.12s;
+}
+
+/* ── Book name cell ── */
+.lib-book-name-cell {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.book-spine {
+  width: 28px;
+  height: 38px;
+  border-radius: 3px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 4px;
+}
+
+.book-spine-line {
+  width: 80%;
+  height: 2px;
+  background: rgba(255, 255, 255, 0.5);
+  border-radius: 1px;
+}
+.book-spine-line.short {
+  width: 50%;
+}
+
+.lib-book-title {
+  font-size: 14px;
+  font-weight: 500;
+  color: #111827;
+}
+
+.lib-td-id {
+  font-size: 13px;
+  color: #6b7280;
+  font-family: monospace;
+  white-space: nowrap;
+}
+
+.lib-td {
+  font-size: 13px;
+  color: #374151;
+}
+
+/* ── Status badge ── */
+.lib-status {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 12px;
+  border-radius: 20px;
+  white-space: nowrap;
+}
+
+.lib-status.available {
+  color: #0ea5e9;
+  background: #e0f2fe;
+}
+.lib-status.checked-out {
+  color: #f43f5e;
+  background: #ffe4e6;
+}
