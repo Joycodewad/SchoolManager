@@ -2,7 +2,7 @@ from rest_framework.routers import DefaultRouter
 
 from django.urls import path
 
-from .views import AcademicPeriodCloseView, AcademicYearViewSet, CustomUserViewSet, EnrollmentNumberSuggestionView, LoginView, LogoutView, OwnerViewSet, RoleChoicesView, SchoolLevelViewSet, SchoolViewSet, StudentEnrollmentViewSet, SubjectViewSet, TeacherViewSet, UsernameSuggestionView
+from .views import AcademicPeriodCloseView, AcademicYearViewSet, CustomUserViewSet, EnrollmentNumberSuggestionView, LoginView, LogoutView, OwnerViewSet, RoleChoicesView, SchoolClassViewSet, SchoolLevelViewSet, SchoolViewSet, StudentEnrollmentViewSet, SubjectViewSet, TeacherViewSet, UsernameSuggestionView
 
 router = DefaultRouter()
 router.register("teachers", TeacherViewSet, basename="teacher")
@@ -25,6 +25,8 @@ urlpatterns = [
         TeacherViewSet.as_view({"get": "retrieve", "patch": "partial_update", "delete": "destroy"}),
         name="school-teacher-detail",
     ),
+    path("schools/<int:school_pk>/teachers/<int:pk>/classes/", TeacherViewSet.as_view({"get": "class_assignments", "post": "class_assignments"}), name="teacher-class-assignments"),
+    path("schools/<int:school_pk>/teachers/<int:pk>/unavailability/", TeacherViewSet.as_view({"get": "unavailability", "post": "unavailability"}), name="teacher-unavailability"),
     path(
         "schools/<int:school_pk>/subjects/",
         SubjectViewSet.as_view({"get": "list", "post": "create"}),
@@ -72,7 +74,7 @@ urlpatterns = [
     ),
     path(
         "schools/<int:school_pk>/enrollments/<int:pk>/",
-        StudentEnrollmentViewSet.as_view({"get": "retrieve", "delete": "destroy"}),
+        StudentEnrollmentViewSet.as_view({"get": "retrieve", "patch": "partial_update", "delete": "destroy"}),
         name="student-enrollment-detail",
     ),
     path(
@@ -80,5 +82,7 @@ urlpatterns = [
         SchoolLevelViewSet.as_view({"get": "list"}),
         name="school-levels",
     ),
+    path("schools/<int:school_pk>/classes/", SchoolClassViewSet.as_view({"get": "list", "post": "create"}), name="school-classes"),
+    path("schools/<int:school_pk>/classes/<int:pk>/", SchoolClassViewSet.as_view({"get": "retrieve", "patch": "partial_update", "delete": "destroy"}), name="school-class-detail"),
     *router.urls,
 ]

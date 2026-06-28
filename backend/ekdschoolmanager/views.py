@@ -8,7 +8,7 @@ from datetime import date, datetime, timedelta
 
 from django.contrib.auth import authenticate
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import Count, Q
 from django.utils.text import slugify
 from rest_framework import serializers, status, viewsets
 from rest_framework.authtoken.models import Token
@@ -18,8 +18,8 @@ from rest_framework.permissions import AllowAny, BasePermission
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .models import AcademicPeriod, AcademicYear, CustomUser, School, SchoolLevel, SchoolMembership, StudentEnrollment, Subject
-from .serializers import AcademicPeriodSerializer, AcademicYearSerializer, CustomUserSerializer, SchoolLevelSerializer, SchoolMembershipSerializer, SchoolSerializer, StudentEnrollmentSerializer, SubjectSerializer
+from .models import AcademicPeriod, AcademicYear, ClassSubject, CustomUser, School, SchoolClass, SchoolLevel, SchoolMembership, StudentEnrollment, Subject, TeacherAssignmentSubject, TeacherClassAssignment, TeacherUnavailability
+from .serializers import AcademicPeriodSerializer, AcademicYearSerializer, CustomUserSerializer, SchoolClassSerializer, SchoolLevelSerializer, SchoolMembershipSerializer, SchoolSerializer, StudentEnrollmentSerializer, SubjectSerializer
 
 
 XLSX_NS = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
@@ -286,6 +286,12 @@ class CustomUserViewSet(SchoolScopedMixin, viewsets.ModelViewSet):
 
 
 class TeacherViewSet(CustomUserViewSet):
+    def get_selected_academic_year(self):
+        try:
+            return AcademicYear.objects.get(pk=self.request.headers.get("X-Academic-Year-ID"), school=self.get_school())
+        except (AcademicYear.DoesNotExist, ValueError, TypeError):
+            raise serializers.ValidationError({"academic_year": "Sélectionnez une année académique valide."})
+
     def get_queryset(self):
         school = self.get_school()
         return CustomUser.objects.filter(
@@ -302,7 +308,7 @@ class TeacherViewSet(CustomUserViewSet):
             ],
             school_memberships__is_active=True,
             is_archived=False,
-        ).distinct()
+        ).select_related("primary_subject", "secondary_subject", "tertiary_subject").distinct()
 
     def perform_create(self, serializer):
         role = serializer.validated_data.get("role", CustomUser.Role.TEACHER)
@@ -322,6 +328,144 @@ class TeacherViewSet(CustomUserViewSet):
                 SchoolMembership(school=school, user=user, role=role)
                 for school in schools
             ])
+
+    def perform_update(self, serializer):
+        self.ensure_manager()
+        selected_ids = serializer.validated_data.pop("school_ids", None)
+        role = serializer.validated_data.get("role", serializer.instance.role)
+        if role == CustomUser.Role.OWNER and not self.request.user.is_superuser:
+            raise serializers.ValidationError({"role": "Seul un superutilisateur peut attribuer le rôle propriétaire."})
+        schools = None
+        if selected_ids is not None:
+            if not selected_ids:
+                raise serializers.ValidationError({"school_ids": "Sélectionnez au moins une école."})
+            schools = list(accessible_schools(self.request.user).filter(id__in=set(selected_ids)))
+            if len(schools) != len(set(selected_ids)):
+                raise serializers.ValidationError({"school_ids": "Une ou plusieurs écoles sont inaccessibles."})
+            for school in schools:
+                self.ensure_manager_for_school(school)
+        with transaction.atomic():
+            user = serializer.save(role=role)
+            if schools is not None:
+                SchoolMembership.objects.filter(user=user).exclude(school__in=schools).update(is_active=False)
+                for school in schools:
+                    SchoolMembership.objects.update_or_create(
+                        school=school,
+                        user=user,
+                        defaults={"role": role, "is_active": True},
+                    )
+
+    @action(detail=True, methods=["get", "post"], url_path="classes")
+    def class_assignments(self, request, pk=None, school_pk=None):
+        teacher = self.get_object()
+        year = self.get_selected_academic_year()
+        if teacher.role != CustomUser.Role.TEACHER:
+            return Response({"teacher": "Les classes peuvent être assignées uniquement à un enseignant."}, status=400)
+        if request.method == "GET":
+            assignments = TeacherClassAssignment.objects.filter(
+                school=self.get_school(), academic_year=year, teacher=teacher,
+            ).prefetch_related("subject_links__class_subject")
+            conflicts = TeacherAssignmentSubject.objects.filter(
+                assignment__school=self.get_school(), assignment__academic_year=year,
+            ).exclude(assignment__teacher=teacher).select_related("assignment__teacher", "class_subject")
+            return Response({
+                "assignments": [{
+                    "class_id": assignment.school_class_id,
+                    "subject_ids": [link.class_subject.subject_id for link in assignment.subject_links.all()],
+                } for assignment in assignments],
+                "unavailable_subjects": [{
+                    "class_id": link.assignment.school_class_id,
+                    "subject_id": link.class_subject.subject_id,
+                    "teacher_name": link.assignment.teacher.get_full_name(),
+                } for link in conflicts],
+            })
+        self.ensure_manager()
+        requested = request.data.get("assignments", [])
+        class_ids = [item.get("class_id") for item in requested]
+        if len(class_ids) != len(set(class_ids)):
+            return Response({"assignments": "Une classe ne peut apparaître qu’une seule fois."}, status=400)
+        classes = list(SchoolClass.objects.filter(
+            id__in=class_ids, school=self.get_school(), academic_year=year, is_active=True,
+        ))
+        if len(classes) != len(class_ids):
+            return Response({"assignments": "Une ou plusieurs classes sont invalides."}, status=400)
+        class_map = {school_class.id: school_class for school_class in classes}
+        prepared = []
+        selected_config_ids = []
+        teacher_subject_ids = {
+            subject_id for subject_id in (
+                teacher.primary_subject_id, teacher.secondary_subject_id, teacher.tertiary_subject_id,
+            ) if subject_id
+        }
+        for item in requested:
+            subject_ids = list(dict.fromkeys(item.get("subject_ids", [])))
+            if not subject_ids:
+                return Response({"assignments": f"Sélectionnez au moins une matière pour {class_map[item['class_id']].name}."}, status=400)
+            configs = list(ClassSubject.objects.filter(school_class_id=item["class_id"], subject_id__in=subject_ids))
+            if len(configs) != len(subject_ids):
+                return Response({"assignments": "Une matière sélectionnée n’est pas configurée dans cette classe."}, status=400)
+            invalid_subjects = [config.subject.name for config in configs if config.subject_id not in teacher_subject_ids]
+            if invalid_subjects:
+                return Response({"assignments": f"Cet enseignant n’enseigne pas : {', '.join(invalid_subjects)}."}, status=400)
+            prepared.append((class_map[item["class_id"]], configs))
+            selected_config_ids.extend(config.id for config in configs)
+        conflicts = TeacherAssignmentSubject.objects.filter(
+            class_subject_id__in=selected_config_ids,
+        ).exclude(assignment__teacher=teacher).select_related("assignment__teacher", "class_subject__subject").first()
+        if conflicts:
+            return Response({"assignments": f"{conflicts.class_subject.subject.name} est déjà enseignée par {conflicts.assignment.teacher.get_full_name()} dans cette classe."}, status=400)
+        with transaction.atomic():
+            TeacherClassAssignment.objects.filter(school=self.get_school(), academic_year=year, teacher=teacher).delete()
+            links = []
+            for school_class, configs in prepared:
+                assignment = TeacherClassAssignment.objects.create(school=self.get_school(), academic_year=year, teacher=teacher, school_class=school_class)
+                links.extend(TeacherAssignmentSubject(assignment=assignment, class_subject=config) for config in configs)
+            TeacherAssignmentSubject.objects.bulk_create(links)
+        return Response({"assignments": len(prepared)})
+
+    @action(detail=True, methods=["get", "post"], url_path="unavailability")
+    def unavailability(self, request, pk=None, school_pk=None):
+        teacher = self.get_object()
+        year = self.get_selected_academic_year()
+        if teacher.role != CustomUser.Role.TEACHER:
+            return Response({"teacher": "Les indisponibilités concernent uniquement les enseignants."}, status=400)
+        queryset = TeacherUnavailability.objects.filter(school=self.get_school(), academic_year=year, teacher=teacher)
+        if request.method == "GET":
+            return Response([{
+                "id": item.id, "day": item.day, "day_label": item.get_day_display(), "all_day": item.all_day,
+                "start_time": item.start_time.strftime("%H:%M") if item.start_time else None,
+                "end_time": item.end_time.strftime("%H:%M") if item.end_time else None,
+            } for item in queryset])
+        self.ensure_manager()
+        slots = request.data.get("slots", [])
+        normalized = []
+        by_day = {}
+        for index, slot in enumerate(slots, start=1):
+            try:
+                day = int(slot.get("day"))
+                if day not in range(7): raise ValueError
+                all_day = bool(slot.get("all_day"))
+                start = end = None
+                if not all_day:
+                    start = datetime.strptime(str(slot.get("start_time")), "%H:%M").time()
+                    end = datetime.strptime(str(slot.get("end_time")), "%H:%M").time()
+                    if start >= end: raise ValueError
+            except (TypeError, ValueError):
+                return Response({"slots": f"Plage invalide à la ligne {index}."}, status=400)
+            existing = by_day.setdefault(day, [])
+            if existing and (all_day or any(item[0] for item in existing)):
+                return Response({"slots": f"Les indisponibilités du jour {day + 1} se chevauchent."}, status=400)
+            if not all_day and any(not (end <= item[1] or start >= item[2]) for item in existing):
+                return Response({"slots": f"Les indisponibilités du jour {day + 1} se chevauchent."}, status=400)
+            existing.append((all_day, start, end))
+            normalized.append((day, all_day, start, end))
+        with transaction.atomic():
+            queryset.delete()
+            TeacherUnavailability.objects.bulk_create([
+                TeacherUnavailability(school=self.get_school(), academic_year=year, teacher=teacher, day=day, all_day=all_day, start_time=start, end_time=end)
+                for day, all_day, start, end in normalized
+            ])
+        return Response({"slots": len(normalized)})
 
 
 class SubjectViewSet(SchoolScopedMixin, viewsets.ModelViewSet):
@@ -436,7 +580,7 @@ class AcademicPeriodCloseView(SchoolScopedMixin, APIView):
 class StudentEnrollmentViewSet(SchoolScopedMixin, viewsets.ModelViewSet):
     serializer_class = StudentEnrollmentSerializer
     parser_classes = [JSONParser, MultiPartParser, FormParser]
-    http_method_names = ["get", "post", "delete", "head", "options"]
+    http_method_names = ["get", "post", "patch", "delete", "head", "options"]
 
     def get_academic_year(self):
         year_id = self.request.headers.get("X-Academic-Year-ID")
@@ -453,7 +597,7 @@ class StudentEnrollmentViewSet(SchoolScopedMixin, viewsets.ModelViewSet):
             school=self.get_school(),
             academic_year=self.get_academic_year(),
             status=StudentEnrollment.Status.ACTIVE,
-        ).select_related("student", "academic_year")
+        ).select_related("student", "academic_year", "level", "school_class")
 
     def get_serializer_context(self):
         context = super().get_serializer_context()
@@ -473,6 +617,10 @@ class StudentEnrollmentViewSet(SchoolScopedMixin, viewsets.ModelViewSet):
         self.ensure_manager()
         instance.status = StudentEnrollment.Status.CANCELLED
         instance.save(update_fields=["status"])
+
+    def perform_update(self, serializer):
+        self.ensure_manager()
+        serializer.save()
 
     @action(detail=False, methods=["post"], url_path="import", parser_classes=[MultiPartParser, FormParser])
     def import_file(self, request, school_pk=None):
@@ -511,7 +659,8 @@ class StudentEnrollmentViewSet(SchoolScopedMixin, viewsets.ModelViewSet):
             "matricule": "enrollment_number", "numero_matricule": "enrollment_number",
             "nom": "last_name", "prenoms": "first_names", "prénoms": "first_names",
             "genre": "gender", "date_naissance": "date_of_birth", "date_de_naissance": "date_of_birth",
-            "niveau": "level", "adresse": "address",
+            "niveau": "level", "classe": "school_class", "nom_classe": "school_class", "nom_de_la_classe": "school_class",
+            "adresse": "address",
         }
         normalized_rows = []
         errors = []
@@ -522,6 +671,10 @@ class StudentEnrollmentViewSet(SchoolScopedMixin, viewsets.ModelViewSet):
             row = {aliases.get(slugify(str(key)).replace("-", "_"), slugify(str(key)).replace("-", "_")): value for key, value in source_row.items()}
             level_name = str(row.get("level") or "").strip()
             level = SchoolLevel.objects.filter(school=school, name__iexact=level_name, is_active=True).first()
+            class_name = str(row.get("school_class") or "").strip()
+            school_class = SchoolClass.objects.filter(
+                school=school, academic_year=academic_year, group__iexact=class_name, is_active=True,
+            ).first() if class_name else None
             number = str(row.get("enrollment_number") or "").strip().upper().replace(" ", "")
             if not number:
                 while True:
@@ -542,6 +695,7 @@ class StudentEnrollmentViewSet(SchoolScopedMixin, viewsets.ModelViewSet):
                 "date_of_birth": str(birth_date or "").strip(),
                 "address": str(row.get("address") or "").strip(),
                 "level": level.pk if level else None,
+                "school_class": school_class.pk if school_class else None,
             }
             if number.casefold() in seen_numbers:
                 errors.append({"ligne": index, "erreurs": {"matricule": ["Matricule répété dans le fichier."]}})
@@ -549,17 +703,36 @@ class StudentEnrollmentViewSet(SchoolScopedMixin, viewsets.ModelViewSet):
             seen_numbers.add(number.casefold())
             serializer = self.get_serializer(data=payload)
             if serializer.is_valid():
-                normalized_rows.append(serializer)
+                row_errors = {}
+                if not class_name:
+                    row_errors["classe"] = ["La classe est obligatoire pour assigner l’élève."]
+                elif not school_class:
+                    row_errors["classe"] = [f"La classe « {class_name} » n’existe pas dans cette école pour l’année {academic_year.name}. Vérifiez son nom exact."]
+                elif level and school_class.level_id != level.id:
+                    row_errors["classe"] = [f"La classe « {class_name} » appartient au niveau {school_class.level.name}, pas au niveau {level_name}."]
+                if row_errors:
+                    errors.append({"ligne": index, "erreurs": row_errors})
+                else:
+                    normalized_rows.append(serializer)
             else:
                 row_errors = dict(serializer.errors)
                 if not level:
                     row_errors["niveau"] = [f"Niveau « {level_name} » introuvable dans cette école."]
+                if not class_name:
+                    row_errors["classe"] = ["La classe est obligatoire pour assigner l’élève."]
+                elif not school_class:
+                    row_errors["classe"] = [f"La classe « {class_name} » n’existe pas dans cette école pour l’année {academic_year.name}. Vérifiez son nom exact."]
+                elif level and school_class.level_id != level.id:
+                    row_errors["classe"] = [f"La classe « {class_name} » appartient au niveau {school_class.level.name}, pas au niveau {level_name}."]
                 errors.append({"ligne": index, "erreurs": row_errors})
 
         if not rows:
             return Response({"file": "Le fichier ne contient aucun élève."}, status=400)
         if errors:
-            return Response({"message": "Certaines lignes sont invalides.", "errors": errors}, status=400)
+            return Response({
+                "message": "Import annulé : aucune donnée du fichier n’a été enregistrée. Corrigez les lignes indiquées puis réessayez.",
+                "errors": errors,
+            }, status=400)
 
         with transaction.atomic():
             enrollments = [serializer.save() for serializer in normalized_rows]
@@ -593,6 +766,43 @@ class SchoolLevelViewSet(SchoolScopedMixin, viewsets.ReadOnlyModelViewSet):
 
     def get_queryset(self):
         return SchoolLevel.objects.filter(school=self.get_school(), is_active=True)
+
+
+class SchoolClassViewSet(SchoolScopedMixin, viewsets.ModelViewSet):
+    serializer_class = SchoolClassSerializer
+
+    def get_academic_year(self):
+        year_id = self.request.headers.get("X-Academic-Year-ID")
+        try:
+            return AcademicYear.objects.get(pk=year_id, school=self.get_school())
+        except (AcademicYear.DoesNotExist, ValueError, TypeError):
+            raise serializers.ValidationError({"academic_year": "Sélectionnez une année académique valide."})
+
+    def get_queryset(self):
+        return SchoolClass.objects.filter(school=self.get_school(), academic_year=self.get_academic_year(), is_active=True).annotate(
+            effectif=Count("student_enrollments", filter=Q(student_enrollments__status=StudentEnrollment.Status.ACTIVE), distinct=True),
+        ).select_related("level", "academic_year", "homeroom_teacher").prefetch_related("subject_configurations__subject")
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context.update(school=self.get_school(), academic_year=self.get_academic_year())
+        return context
+
+    def perform_create(self, serializer):
+        self.ensure_manager()
+        year = self.get_academic_year()
+        if not year.is_active or year.is_closed:
+            raise serializers.ValidationError({"academic_year": "Les classes peuvent être créées uniquement dans l’année active."})
+        serializer.save(school=self.get_school(), academic_year=year)
+
+    def perform_update(self, serializer):
+        self.ensure_manager()
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        self.ensure_manager()
+        instance.is_active = False
+        instance.save(update_fields=["is_active"])
 
 
 class IsSuperUser(BasePermission):

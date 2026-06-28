@@ -27,6 +27,8 @@ import Schools from "./pages/Schools";
 import Subjects from "./pages/Subjects";
 import AcademicYears from "./pages/AcademicYears";
 import Enrollments from "./pages/Enrollments";
+import Classes from "./pages/Classes";
+import StudentDetail from "./pages/StudentDetail";
 function App() {
   return (
     <BrowserRouter>
@@ -40,9 +42,12 @@ function App() {
           <Route path="/schools/:schoolId/subjects" element={<Subjects />} />
           <Route path="/schools/:schoolId/academic-years" element={<AcademicYears />} />
           <Route path="/schools/:schoolId/enrollments" element={<Enrollments />} />
+          <Route path="/schools/:schoolId/classes" element={<Classes />} />
           <Route path="/schools/:schoolId/teachers/add" element={<AddTeacher />} />
+          <Route path="/schools/:schoolId/teachers/:id/edit" element={<AddTeacher />} />
           <Route path="/schools/:schoolId/teachers/:id" element={<TeacherDetail />} />
           <Route path="/schools/:schoolId/students" element={<Students />} />
+          <Route path="/schools/:schoolId/students/:id" element={<StudentDetail />} />
           <Route path="/schools/:schoolId/attendance" element={<Attendance />} />
           <Route path="/schools/:schoolId/message" element={<Message />} />
           <Route path="/schools/:schoolId/calendar" element={<Calendar />} />

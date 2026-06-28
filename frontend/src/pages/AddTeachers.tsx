@@ -1,18 +1,9 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { createTeacher, listRoles, RoleOption, suggestUsername, TeacherApiError } from "../api/teachers";
+import { createTeacher, getTeacher, listRoles, RoleOption, suggestUsername, TeacherApiError, updateTeacher } from "../api/teachers";
+import { listSubjects, Subject } from "../api/subjects";
 import { useAuth } from "../hooks/AuthContext";
 
-const SUBJECTS = [
-  "Mathématiques",
-  "Sciences",
-  "Anglais",
-  "Histoire",
-  "Géographie",
-  "Art",
-  "Musique",
-  "Éducation physique",
-];
 const GENDERS = [
   { value: "M", label: "Masculin" },
   { value: "F", label: "Féminin" },
@@ -51,7 +42,8 @@ const formatPhoneInput = (value: string) => {
 
 export default function AddTeacher() {
   const navigate = useNavigate();
-  const { schoolId } = useParams();
+  const { schoolId, id } = useParams();
+  const editingId = id ? Number(id) : null;
   const { schools, activeSchool } = useAuth();
   const [tab, setTab] = useState("manual"); // "manual" | "csv"
   const [teachers, setTeachers] = useState([
@@ -61,6 +53,8 @@ export default function AddTeacher() {
   const [error, setError] = useState("");
   const [fieldErrors, setFieldErrors] = useState<Record<number, Record<string, string>>>({});
   const [roles, setRoles] = useState<RoleOption[]>([]);
+  const [subjects, setSubjects] = useState<Subject[]>([]);
+  const [subjectsLoading, setSubjectsLoading] = useState(false);
 
   const update = (i, field, val) =>
     setTeachers((prev) =>
@@ -94,6 +88,43 @@ export default function AddTeacher() {
       setError(requestError instanceof Error ? requestError.message : "Impossible de charger les rôles."),
     );
   }, []);
+
+  useEffect(() => {
+    if (!schoolId) {
+      setSubjects([]);
+      return;
+    }
+    setSubjectsLoading(true);
+    void listSubjects(schoolId)
+      .then(setSubjects)
+      .catch((requestError) => setError(
+        requestError instanceof Error ? requestError.message : "Impossible de charger les matières.",
+      ))
+      .finally(() => setSubjectsLoading(false));
+  }, [schoolId]);
+
+  useEffect(() => {
+    if (!editingId) return;
+    setIsSubmitting(true);
+    void getTeacher(editingId).then((teacher) => {
+      setTeachers([{
+        username: teacher.username,
+        usernameTouched: true,
+        role: teacher.role,
+        lastName: teacher.last_name,
+        firstNames: teacher.first_names,
+        email: teacher.email ?? "",
+        phone: teacher.phone ?? "+228",
+        gender: teacher.gender,
+        primarySubject: teacher.primary_subject ? String(teacher.primary_subject) : "",
+        secondarySubject: teacher.secondary_subject ? String(teacher.secondary_subject) : "",
+        tertiarySubject: teacher.tertiary_subject ? String(teacher.tertiary_subject) : "",
+        schoolIds: teacher.assigned_school_ids,
+      }]);
+    }).catch((requestError) => setError(
+      requestError instanceof Error ? requestError.message : "Impossible de charger le personnel.",
+    )).finally(() => setIsSubmitting(false));
+  }, [editingId]);
 
   const addAnother = () => setTeachers((prev) => [
     ...prev,
@@ -132,19 +163,21 @@ export default function AddTeacher() {
 
       for (const [index, teacher] of teachers.entries()) {
         currentTeacherIndex = index;
-        await createTeacher({
+        const payload = {
           username: teacher.username.trim(),
           last_name: teacher.lastName.trim(),
           first_names: teacher.firstNames.trim(),
           email: teacher.email.trim(),
           phone: formatPhone(teacher.phone),
           gender: teacher.gender as "M" | "F",
-          primary_subject: teacher.primarySubject,
-          secondary_subject: teacher.secondarySubject,
-          tertiary_subject: teacher.tertiarySubject,
+          primary_subject: teacher.primarySubject ? Number(teacher.primarySubject) : null,
+          secondary_subject: teacher.secondarySubject ? Number(teacher.secondarySubject) : null,
+          tertiary_subject: teacher.tertiarySubject ? Number(teacher.tertiarySubject) : null,
           school_ids: teacher.schoolIds,
           role: teacher.role,
-        });
+        };
+        if (editingId) await updateTeacher(editingId, payload);
+        else await createTeacher(payload);
       }
       navigate(`/schools/${schoolId}/teachers`);
     } catch (submitError) {
@@ -161,11 +194,11 @@ export default function AddTeacher() {
     <div className="content-inner">
       {/* Header row */}
       <div className="add-teacher-header">
-        <h1 className="page-title">Ajouter du personnel</h1>
+        <h1 className="page-title">{editingId ? "Modifier le personnel" : "Ajouter du personnel"}</h1>
       </div>
 
       {/* Tabs */}
-      <div className="add-teacher-tabs">
+      {!editingId && <div className="add-teacher-tabs">
         <button
           className={`tab-btn${tab === "manual" ? " tab-active" : ""}`}
           type="button"
@@ -180,7 +213,7 @@ export default function AddTeacher() {
         >
           Importer un CSV
         </button>
-      </div>
+      </div>}
 
       {tab === "manual" && (
         <form className="teacher-forms" onSubmit={handleSubmit}>
@@ -287,9 +320,10 @@ export default function AddTeacher() {
                 </div>
                 <div className="form-group">
                   <label className="form-label">Matière principale (optionnel)</label>
-                  <select className="form-select" value={t.primarySubject} onChange={(e) => update(i, "primarySubject", e.target.value)}>
-                    <option value="">Aucune</option>
-                    {SUBJECTS.map((subject) => <option key={subject} value={subject}>{subject}</option>)}
+                  <select className="form-select" value={t.primarySubject} disabled={subjectsLoading} onChange={(e) => update(i, "primarySubject", e.target.value)}>
+                    <option value="">{subjectsLoading ? "Chargement…" : "Aucune"}</option>
+                    {subjects.map((subject) => <option key={subject.id} value={subject.id}
+                      disabled={String(subject.id) === t.secondarySubject || String(subject.id) === t.tertiarySubject}>{subject.name}</option>)}
                   </select>
                 </div>
               </div>
@@ -297,16 +331,18 @@ export default function AddTeacher() {
               <div className="form-row-2">
                 <div className="form-group">
                   <label className="form-label">Matière secondaire (optionnel)</label>
-                  <select className="form-select" value={t.secondarySubject} onChange={(e) => update(i, "secondarySubject", e.target.value)}>
-                    <option value="">Aucune</option>
-                    {SUBJECTS.map((subject) => <option key={subject} value={subject}>{subject}</option>)}
+                  <select className="form-select" value={t.secondarySubject} disabled={subjectsLoading} onChange={(e) => update(i, "secondarySubject", e.target.value)}>
+                    <option value="">{subjectsLoading ? "Chargement…" : "Aucune"}</option>
+                    {subjects.map((subject) => <option key={subject.id} value={subject.id}
+                      disabled={String(subject.id) === t.primarySubject || String(subject.id) === t.tertiarySubject}>{subject.name}</option>)}
                   </select>
                 </div>
                 <div className="form-group">
                   <label className="form-label">Matière tertiaire (optionnel)</label>
-                  <select className="form-select" value={t.tertiarySubject} onChange={(e) => update(i, "tertiarySubject", e.target.value)}>
-                    <option value="">Aucune</option>
-                    {SUBJECTS.map((subject) => <option key={subject} value={subject}>{subject}</option>)}
+                  <select className="form-select" value={t.tertiarySubject} disabled={subjectsLoading} onChange={(e) => update(i, "tertiarySubject", e.target.value)}>
+                    <option value="">{subjectsLoading ? "Chargement…" : "Aucune"}</option>
+                    {subjects.map((subject) => <option key={subject.id} value={subject.id}
+                      disabled={String(subject.id) === t.primarySubject || String(subject.id) === t.secondarySubject}>{subject.name}</option>)}
                   </select>
                 </div>
               </div>
@@ -315,7 +351,7 @@ export default function AddTeacher() {
 
           {/* Actions */}
           <div className="form-actions">
-            <button className="btn-add-another" type="button" onClick={addAnother} disabled={isSubmitting}>
+            {!editingId && <button className="btn-add-another" type="button" onClick={addAnother} disabled={isSubmitting}>
               <svg
                 width="18"
                 height="18"
@@ -328,9 +364,9 @@ export default function AddTeacher() {
                 <path d="M12 8v8M8 12h8" />
               </svg>
               En ajouter un autre
-            </button>
+            </button>}
             <button className="btn-primary" type="submit" disabled={isSubmitting}>
-              {isSubmitting ? "Enregistrement…" : "Enregistrer le personnel"}
+              {isSubmitting ? "Enregistrement…" : editingId ? "Mettre à jour le personnel" : "Enregistrer le personnel"}
             </button>
           </div>
         </form>

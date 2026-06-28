@@ -1040,6 +1040,51 @@
 .enrollment-address textarea { min-height: 80px; resize: vertical; }
 .page-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .import-hint { margin: -8px 0 18px; color: #64748b; font-size: 13px; }
+.form-error { white-space: pre-line; }
+.class-modal { width: min(820px, calc(100vw - 32px)); max-height: 90vh; overflow-y: auto; }
+.class-subjects { border: 1px solid #e2e8f0; border-radius: 10px; padding: 14px; }
+.class-subjects legend { padding: 0 6px; font-weight: 700; color: #334155; }
+.class-subject-row { padding: 10px 0; border-bottom: 1px solid #f1f5f9; }
+.class-subject-row:last-child { border-bottom: 0; }
+.class-subject-check, .class-option { display: flex; align-items: center; gap: 7px; }
+.class-subject-check { color: #1e293b; font-size: 14px; font-weight: 700; line-height: 1.4; }
+.class-subject-check input { flex: 0 0 auto; }
+.class-subject-settings { display: grid; grid-template-columns: 1fr 1fr auto auto; gap: 12px; align-items: end; margin: 10px 0 0 24px; }
+.class-subject-settings > label { font-size: 12px; color: #475569; }
+@media (max-width: 720px) { .class-subject-settings { grid-template-columns: 1fr 1fr; margin-left: 0; } }
+.teacher-unavailability-modal { width: min(900px, calc(100vw - 32px)); }
+.unavailability-row { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid #e2e8f0; }
+.unavailability-row .form-select { width: 145px; }
+.unavailability-row .form-input { width: 125px; }
+.teacher-unavailability-modal > .btn-primary { margin-top: 16px; }
+@media (max-width: 760px) { .unavailability-row { flex-wrap: wrap; } }
+.assignment-hours { padding: 10px 12px; border-radius: 8px; color: #1e3a8a; background: #eff6ff; }
+.teacher-assignment-modal { width: min(760px, calc(100vw - 32px)); }
+.teacher-class-assignment-list { display: flex; flex-direction: column; gap: 10px; max-height: 55vh; overflow-y: auto; }
+.teacher-class-assignment { padding: 12px; border: 1px solid #e2e8f0; border-radius: 10px; }
+.assignment-subjects { display: grid; gap: 7px; margin: 10px 0 0 25px; }
+.assignment-subject { display: flex; align-items: center; gap: 8px; color: #334155; font-size: 13px; }
+.assignment-subject.disabled { color: #b91c1c; }
+.class-size-ok { color: #15803d; }
+.class-size-over { color: #dc2626; }
+.classes-page { max-width: 1400px; width: calc(100% + 48px); margin-left: -24px; }
+.class-name-cell { min-width: 135px; white-space: nowrap; }
+.students-page { max-width: 1400px; }
+.student-filters { display: grid; grid-template-columns: 1.4fr repeat(4, 1fr); gap: 10px; margin-bottom: 18px; }
+.student-profile-card { display: block; padding: 24px; }
+@media (max-width: 900px) { .student-filters { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 900px) { .classes-page { width: 100%; margin-left: 0; } }
+.teacher-full-details { width: min(880px, calc(100vw - 32px)); }
+.teacher-detail-summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+.teacher-detail-summary > div { padding: 12px; border-radius: 9px; background: #f8fafc; }
+.teacher-detail-summary span { display: block; margin-bottom: 5px; color: #64748b; font-size: 11px; }
+.teacher-detail-summary strong { color: #1e293b; font-size: 13px; overflow-wrap: anywhere; }
+.teacher-detail-section { margin-top: 20px; }
+.teacher-detail-section h3 { margin: 0 0 9px; color: #172554; font-size: 15px; }
+.teacher-detail-section p, .teacher-detail-section li { color: #475569; font-size: 13px; }
+.teacher-assigned-class-list { display: grid; gap: 8px; }
+.teacher-assigned-class { display: grid; grid-template-columns: 130px 1fr 100px; gap: 12px; padding: 11px 13px; border: 1px solid #e2e8f0; border-radius: 9px; color: #475569; font-size: 13px; }
+@media (max-width: 720px) { .teacher-detail-summary { grid-template-columns: 1fr 1fr; } .teacher-assigned-class { grid-template-columns: 1fr; } }
 .level-badge { display: inline-block; padding: 4px 8px; border-radius: 999px; color: #1d4ed8; background: #eff6ff; font-size: 11px; font-weight: 800; }
 @media (max-width: 650px) { .enrollment-form { grid-template-columns: 1fr; } }
 

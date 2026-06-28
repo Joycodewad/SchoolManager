@@ -1,5 +1,4 @@
-const API_URL = import.meta.env.VITE_API_URL ?? "http://127.0.0.1:8000/api";
-
+const API_URL = import.meta.env.VITE_API_URL ?? "/api";
 export interface School {
   id: number;
   username: string;
@@ -26,13 +25,23 @@ export interface LoginResponse {
 }
 
 export async function loginUser(username: string, password: string): Promise<LoginResponse> {
-  const response = await fetch(`${API_URL}/auth/login/`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ username, password }),
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${API_URL}/auth/login/`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: username.trim(), password }),
+    });
+  } catch {
+    throw new Error("Impossible de joindre le serveur. Vérifiez que Django est démarré.");
+  }
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.message || "Nom d’utilisateur ou mot de passe incorrect.");
+  if (!response.ok) {
+    if (response.status === 400 || response.status === 401) {
+      throw new Error(data.message || "Nom d’utilisateur ou mot de passe incorrect.");
+    }
+    throw new Error(data.message || `Erreur du serveur (${response.status}).`);
+  }
   return data;
 }
 

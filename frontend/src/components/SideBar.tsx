@@ -55,6 +55,15 @@ const MENU = [
     ),
   },
   {
+    path: "/classes",
+    label: "Classes",
+    icon: (
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+        <rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M8 4v16M12 13h5M12 17h3"/>
+      </svg>
+    ),
+  },
+  {
     path: "/enrollments",
     label: "Inscriptions",
     icon: (

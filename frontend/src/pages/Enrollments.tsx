@@ -2,6 +2,7 @@ import { ChangeEvent, FormEvent, useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { cancelEnrollment, createEnrollment, Enrollment, importEnrollments, listEnrollments, listSchoolLevels, SchoolLevel, suggestEnrollmentNumber } from "../api/enrollments";
 import { useAuth } from "../hooks/AuthContext";
+import { listClasses, SchoolClass } from "../api/classes";
 
 export default function Enrollments() {
   const { schoolId = "" } = useParams();
@@ -11,6 +12,8 @@ export default function Enrollments() {
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [levels, setLevels] = useState<SchoolLevel[]>([]);
+  const [classes, setClasses] = useState<SchoolClass[]>([]);
+  const [selectedLevel, setSelectedLevel] = useState("");
   const [enrollmentNumber, setEnrollmentNumber] = useState("");
   const [formError, setFormError] = useState("");
   const [importing, setImporting] = useState(false);
@@ -24,6 +27,7 @@ export default function Enrollments() {
   useEffect(() => {
     void load();
     void listSchoolLevels(schoolId).then(setLevels).catch((e) => setError(e.message));
+    if (activeAcademicYear) void listClasses(schoolId).then(setClasses).catch((e) => setError(e.message));
   }, [schoolId, activeAcademicYear?.id]);
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
@@ -36,13 +40,14 @@ export default function Enrollments() {
         last_name: String(form.get("last_name")).trim(), first_names: String(form.get("first_names")).trim(),
         gender: String(form.get("gender")) as "M" | "F", date_of_birth: String(form.get("date_of_birth")), address: String(form.get("address")).trim(),
         level: Number(form.get("level")),
+        school_class: Number(form.get("school_class")),
       });
-      setItems((current) => [created, ...current]); formElement.reset(); setShowForm(false); setMessage(`Élève inscrit avec le matricule ${created.enrollment_number}.`);
+      setItems((current) => [created, ...current]); formElement.reset(); setSelectedLevel(""); setShowForm(false); setMessage(`Élève inscrit avec le matricule ${created.enrollment_number}.`);
     } catch (e) { setFormError(e instanceof Error ? e.message : "Inscription impossible."); }
   };
 
   const openForm = async () => {
-    setError(""); setFormError("");
+    setError(""); setFormError(""); setSelectedLevel("");
     try {
       setEnrollmentNumber(await suggestEnrollmentNumber(schoolId));
       setShowForm(true);
@@ -78,13 +83,13 @@ export default function Enrollments() {
         <button className="btn-secondary" disabled={importing || !activeAcademicYear?.is_active || activeAcademicYear?.is_closed} onClick={() => fileInputRef.current?.click()}>{importing ? "Import en cours…" : "Importer Excel"}</button>
         <button className="btn-primary" disabled={!activeAcademicYear?.is_active || activeAcademicYear?.is_closed} onClick={() => void openForm()}>Inscrire un élève</button>
       </div></div>
-    <p className="import-hint">Colonnes attendues : matricule (optionnel), nom, prenoms, genre, date_naissance, niveau, adresse (optionnel).</p>
+    <p className="import-hint">Colonnes attendues : matricule (optionnel), nom, prenoms, genre, date_naissance, niveau, classe, adresse (optionnel). Le nom de la classe doit correspondre exactement à une classe de l’année active.</p>
     {error && <div className="form-error">{error}</div>}{message && <div className="form-success">{message}</div>}
     {activeAcademicYear && (!activeAcademicYear.is_active || activeAcademicYear.is_closed) && <div className="form-error">Cette année est inactive ou clôturée : aucune nouvelle inscription n’est autorisée.</div>}
     {!activeAcademicYear ? <div className="empty-state"><p className="empty-title">Sélectionnez une année académique</p></div> :
       items.length === 0 ? <div className="empty-state"><p className="empty-title">Aucune inscription pour cette année</p></div> :
-      <div className="teachers-table-wrap"><table className="teachers-table"><thead><tr><th>Matricule</th><th>Nom</th><th>Identifiant</th><th>Niveau</th><th>Genre</th><th>Naissance</th><th>Action</th></tr></thead>
-        <tbody>{items.map((item) => <tr key={item.id}><td><strong>{item.enrollment_number}</strong></td><td>{item.student_name}</td><td>{item.student_username}</td><td><span className="level-badge">{item.level_name}</span></td><td>{item.gender_label}</td><td>{item.date_of_birth_display}</td>
+      <div className="teachers-table-wrap"><table className="teachers-table"><thead><tr><th>Matricule</th><th>Nom</th><th>Identifiant</th><th>Niveau</th><th>Classe</th><th>Genre</th><th>Naissance</th><th>Action</th></tr></thead>
+        <tbody>{items.map((item) => <tr key={item.id}><td><strong>{item.enrollment_number}</strong></td><td>{item.student_name}</td><td>{item.student_username}</td><td><span className="level-badge">{item.level_name}</span></td><td>{item.school_class_name || "Non assignée"}</td><td>{item.gender_label}</td><td>{item.date_of_birth_display}</td>
           <td><button className="subject-delete-btn" onClick={() => void cancel(item)}>Annuler</button></td></tr>)}</tbody></table></div>}
 
     {showForm && <div className="teacher-modal-backdrop" onMouseDown={() => setShowForm(false)}><form className="teacher-modal enrollment-form" onSubmit={submit} onMouseDown={(event) => event.stopPropagation()}>
@@ -95,10 +100,13 @@ export default function Enrollments() {
         onChange={(event) => setEnrollmentNumber(event.target.value.toUpperCase().replace(/\s/g, ""))} required />
         <span className="form-hint">Généré automatiquement, mais modifiable.</span></label>
       <label>Genre *<select className="form-select" name="gender" required><option value="">Choisir</option><option value="M">Masculin</option><option value="F">Féminin</option></select></label>
-      <label>Niveau *<select className="form-select" name="level" required><option value="">Choisir un niveau</option>
+      <label>Niveau *<select className="form-select" name="level" value={selectedLevel} onChange={(event) => setSelectedLevel(event.target.value)} required><option value="">Choisir un niveau</option>
         {(["primaire", "college", "lycee"] as const).map((stage) => <optgroup key={stage} label={levels.find((level) => level.stage === stage)?.stage_label ?? stage}>
           {levels.filter((level) => level.stage === stage).map((level) => <option key={level.id} value={level.id}>{level.name}</option>)}
         </optgroup>)}</select></label>
+      <label>Classe *<select className="form-select" name="school_class" disabled={!selectedLevel} required><option value="">{selectedLevel ? "Choisir une classe" : "Choisissez d’abord le niveau"}</option>
+        {classes.filter((schoolClass) => schoolClass.level === Number(selectedLevel)).map((schoolClass) => <option key={schoolClass.id} value={schoolClass.id}>{schoolClass.name}</option>)}
+      </select></label>
       <label>Date de naissance *<input className="form-input" name="date_of_birth" type="date" required /></label>
       <label className="enrollment-address">Adresse<textarea className="form-input" name="address" /></label>
       <button className="btn-primary" type="submit">Enregistrer l’inscription</button>

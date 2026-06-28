@@ -1,5 +1,4 @@
-const API_URL = import.meta.env.VITE_API_URL ?? "http://127.0.0.1:8000/api";
-
+const API_URL = import.meta.env.VITE_API_URL ?? "/api";
 const authHeaders = () => {
   const token = localStorage.getItem("auth_token");
   const school = JSON.parse(localStorage.getItem("active_school") || "null");
@@ -25,14 +24,22 @@ export interface TeacherPayload {
   email?: string;
   phone: string;
   gender: "M" | "F";
-  primary_subject?: string;
-  secondary_subject?: string;
-  tertiary_subject?: string;
+  primary_subject?: number | null;
+  secondary_subject?: number | null;
+  tertiary_subject?: number | null;
   school_ids?: number[];
   role: string;
 }
 
 export interface RoleOption { value: string; label: string; }
+export interface TeacherUnavailability {
+  id?: number; day: number; day_label?: string; all_day: boolean;
+  start_time: string | null; end_time: string | null;
+}
+export interface TeacherAssignments {
+  assignments: { class_id: number; subject_ids: number[] }[];
+  unavailable_subjects: { class_id: number; subject_id: number; teacher_name: string }[];
+}
 
 export interface Teacher extends TeacherPayload {
   id: number;
@@ -42,6 +49,15 @@ export interface Teacher extends TeacherPayload {
   is_active: boolean;
   is_archived: boolean;
   date_joined: string;
+  primary_subject_name: string | null;
+  secondary_subject_name: string | null;
+  tertiary_subject_name: string | null;
+  assigned_school_ids: number[];
+  assigned_classes: { id: number; name: string; subjects: string[]; weekly_hours: number }[];
+  homeroom_classes: { id: number; name: string }[];
+  unavailability_schedule: TeacherUnavailability[];
+  date_of_birth: string | null;
+  address: string;
 }
 
 export class TeacherApiError extends Error {
@@ -102,6 +118,11 @@ export async function listTeachers(): Promise<Teacher[]> {
   return Array.isArray(data) ? data : data.results ?? [];
 }
 
+export async function getTeacher(id: number): Promise<Teacher> {
+  const response = await fetch(`${teachersUrl()}/${id}/`, { headers: authHeaders() });
+  return parseResponse(response);
+}
+
 export async function createTeacher(teacher: TeacherPayload): Promise<Teacher> {
   const response = await fetch(`${teachersUrl()}/`, {
     method: "POST",
@@ -123,4 +144,21 @@ export async function updateTeacher(id: number, teacher: Partial<TeacherPayload>
 export async function deleteTeacher(id: number): Promise<void> {
   const response = await fetch(`${teachersUrl()}/${id}/`, { method: "DELETE", headers: authHeaders() });
   if (!response.ok) await parseResponse(response);
+}
+
+export async function getTeacherAssignments(id: number): Promise<TeacherAssignments> {
+  const response = await fetch(`${teachersUrl()}/${id}/classes/`, { headers: authHeaders() });
+  return parseResponse(response);
+}
+export async function saveTeacherAssignments(id: number, assignments: { class_id: number; subject_ids: number[] }[]): Promise<void> {
+  const response = await fetch(`${teachersUrl()}/${id}/classes/`, { method: "POST", headers: authHeaders(), body: JSON.stringify({ assignments }) });
+  await parseResponse(response);
+}
+export async function getTeacherUnavailability(id: number): Promise<TeacherUnavailability[]> {
+  const response = await fetch(`${teachersUrl()}/${id}/unavailability/`, { headers: authHeaders() });
+  return parseResponse(response);
+}
+export async function saveTeacherUnavailability(id: number, slots: TeacherUnavailability[]): Promise<void> {
+  const response = await fetch(`${teachersUrl()}/${id}/unavailability/`, { method: "POST", headers: authHeaders(), body: JSON.stringify({ slots }) });
+  await parseResponse(response);
 }
