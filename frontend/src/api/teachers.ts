@@ -24,9 +24,8 @@ export interface TeacherPayload {
   email?: string;
   phone: string;
   gender: "M" | "F";
+  subjects?: number[];
   primary_subject?: number | null;
-  secondary_subject?: number | null;
-  tertiary_subject?: number | null;
   school_ids?: number[];
   role: string;
 }
@@ -49,9 +48,8 @@ export interface Teacher extends TeacherPayload {
   is_active: boolean;
   is_archived: boolean;
   date_joined: string;
+  subject_names: string[];
   primary_subject_name: string | null;
-  secondary_subject_name: string | null;
-  tertiary_subject_name: string | null;
   assigned_school_ids: number[];
   assigned_classes: { id: number; name: string; subjects: string[]; weekly_hours: number }[];
   homeroom_classes: { id: number; name: string }[];

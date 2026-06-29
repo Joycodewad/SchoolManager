@@ -6,6 +6,7 @@ import { useState } from "react";
 export default function TopBanner() {
   const { logout, user, academicYears } = useAuth();
   const currentAcademicYear = academicYears.find((year) => year.is_active) ?? null;
+  const currentSessions = currentAcademicYear?.sessions?.filter((session) => session.is_active) ?? [];
   const navigate = useNavigate();
   const [search, setSearch] = useState("");
 
@@ -50,6 +51,7 @@ export default function TopBanner() {
         {/* Right side */}
         <div className="topbar-right">
           {currentAcademicYear && <div className="topbar-academic-year"><span>Année en cours</span><strong>{currentAcademicYear.name}</strong></div>}
+          {currentSessions.length > 0 && <div className="topbar-academic-session"><span>Sessions en cours</span><strong>{currentSessions.map((session) => session.name).join(" · ")}</strong></div>}
           {/* Chat icon */}
           <button className="topbar-icon-btn">
             <svg

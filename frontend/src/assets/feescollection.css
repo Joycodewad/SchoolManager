@@ -199,7 +199,7 @@
 .fc-table-wrap {
   border: 1px solid #e5e7eb;
   border-radius: 12px;
-  overflow: hidden;
+  overflow-x: auto;
 }
 
 .fc-table {
@@ -225,7 +225,12 @@
   padding: 13px 14px;
   border-bottom: 1px solid #f1f3f7;
   vertical-align: middle;
+  color: #374151;
+  background: #ffffff;
+  font-size: 13px;
 }
+
+.fc-table td b { color: #111827; }
 
 .fc-table tbody tr:last-child td {
   border-bottom: none;
@@ -313,3 +318,78 @@
 .fc-action-btn:hover {
   background: #f3f6fb;
 }
+
+.fc-page-head, .fc-summary, .fc-tabs, .fc-compliance-counts, .fc-config-title { display:flex; align-items:center; justify-content:space-between; gap:16px; }
+.fc-page-head h1 { margin:0 0 5px; color:#172554; font-size:25px; }
+.fc-page-head p, .fc-help { margin:0; color:#64748b; font-size:12px; }
+.fc-summary { display:grid; grid-template-columns:repeat(3,1fr); }
+.fc-summary > div { padding:18px; border:1px solid #dbeafe; border-radius:14px; background:linear-gradient(135deg,#eff6ff,#fff); }
+.fc-summary span { display:block; margin-bottom:8px; color:#64748b; font-size:12px; }
+.fc-summary strong { color:#172554; font-size:20px; }
+.fc-tabs { justify-content:flex-start; padding:5px; border-radius:11px; background:#e2e8f0; width:max-content; }
+.fc-tabs button { padding:9px 14px; border:0; border-radius:8px; background:transparent; color:#475569; cursor:pointer; font-weight:700; }
+.fc-tabs button.active { background:#fff; color:#1d4ed8; box-shadow:0 2px 6px #94a3b844; }
+.fc-block { display:block; margin-top:3px; color:#94a3b8; }
+.fc-empty { padding:30px; text-align:center; color:#94a3b8; }
+.fc-compliance-counts { justify-content:flex-start; margin-bottom:14px; }
+.fc-compliance-counts span { padding:7px 11px; border-radius:999px; font-size:12px; font-weight:800; }
+.fc-compliance-counts .ok, .fc-status.is-ok { color:#166534; background:#dcfce7; }
+.fc-compliance-counts .late, .fc-status.is-late { color:#b91c1c; background:#fee2e2; }
+.fc-compliance-counts b { margin-left:auto; color:#334155; }
+.fc-plan-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(230px,1fr)); gap:13px; }
+.fc-plan-card { padding:15px; border:1px solid #e2e8f0; border-radius:12px; background:#f8fafc; }
+.fc-plan-card h3 { margin:0 0 12px; color:#1e3a8a; font-size:14px; }
+.fc-plan-card p { display:flex; justify-content:space-between; margin:7px 0; color:#64748b; font-size:12px; }
+.fc-plan-card small { display:block; margin:12px 0; color:#64748b; }
+.fc-plan-card button, .fc-config-title button, .fc-config-row button, .fc-rule-row button { border:1px solid #bfdbfe; border-radius:7px; color:#1d4ed8; background:#fff; cursor:pointer; padding:6px 9px; }
+.fc-plan-actions { display:flex; gap:7px; }
+.fc-copy-modal { width:min(520px,90vw); }
+.fc-copy-modal label { display:flex; flex-direction:column; gap:7px; color:#475569; font-size:13px; font-weight:700; }
+.fc-copy-warning { padding:9px; border-radius:8px; color:#9a3412; background:#fff7ed; font-size:12px; }
+.fc-copy-class-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px; max-height:320px; overflow:auto; }
+.fc-copy-class-grid button { display:grid; grid-template-columns:24px 1fr; gap:3px 8px; align-items:center; padding:10px; border:1px solid #e2e8f0; border-radius:9px; color:#334155; background:#fff; text-align:left; cursor:pointer; }
+.fc-copy-class-grid button.selected { border-color:#3b82f6; color:#1d4ed8; background:#eff6ff; }
+.fc-copy-class-grid small { grid-column:2; color:#c2410c; }
+.fc-copy-check { display:flex; align-items:center; justify-content:center; width:20px; height:20px; border:1px solid #cbd5e1; border-radius:5px; color:#fff; }
+.fc-copy-class-grid button.selected .fc-copy-check { border-color:#2563eb; background:#2563eb; }
+.fc-copy-selection { color:#1d4ed8; font-weight:800; }
+.fc-muted { min-height:50px; align-items:center; }
+.fc-modal { display:grid; grid-template-columns:1fr 1fr; gap:14px; max-width:700px; }
+.fc-modal h2, .fc-full { grid-column:1/-1; }
+.fc-payment-due { display:flex; align-items:center; gap:14px; padding:13px; border:1px solid #bfdbfe; border-radius:10px; background:#eff6ff; }
+.fc-payment-due span { color:#475569; font-size:12px; font-weight:700; }
+.fc-payment-due strong { color:#1d4ed8; font-size:19px; }
+.fc-payment-due small { margin-left:auto; color:#64748b; }
+.fc-searchable-select { position:relative; }
+.fc-searchable-select .form-input { padding-right:34px; cursor:text; }
+.fc-searchable-select.open .form-input { border-color:#60a5fa; box-shadow:0 0 0 3px #dbeafe; }
+.fc-select-chevron { position:absolute; top:50%; right:12px; transform:translateY(-50%); color:#64748b; pointer-events:none; }
+.fc-searchable-options { position:absolute; z-index:30; top:calc(100% + 5px); left:0; right:0; max-height:250px; overflow:auto; border:1px solid #cbd5e1; border-radius:10px; background:#fff; box-shadow:0 12px 28px #0f172a24; }
+.fc-searchable-options button { display:flex; flex-direction:column; width:100%; gap:3px; padding:10px 12px; border:0; border-bottom:1px solid #f1f5f9; color:#334155; background:#fff; text-align:left; cursor:pointer; }
+.fc-searchable-options button:hover, .fc-searchable-options button.selected { color:#1d4ed8; background:#eff6ff; }
+.fc-searchable-options small { color:#64748b; font-family:monospace; }
+.fc-no-option { display:block; padding:16px; color:#94a3b8; text-align:center; }
+.fc-expense-search, .fc-date-filter { padding:8px 10px; border:1px solid #e5e7eb; border-radius:8px; color:#374151; background:#fff; font:inherit; outline:none; }
+.fc-expense-search { width:230px; }
+.fc-inline-create { display:flex; gap:7px; }
+.fc-inline-create button { border:1px solid #bfdbfe; color:#1d4ed8; background:#eff6ff; }
+.fc-action-btn.danger { color:#dc2626; border-color:#fecaca; }
+.fc-modal label, .fc-plan-modal label { display:flex; flex-direction:column; gap:6px; color:#475569; font-size:12px; font-weight:700; }
+.fc-plan-modal { width:min(950px,92vw); max-height:90vh; overflow:auto; }
+.fc-plan-base { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; }
+.fc-config-section { margin:18px 0; padding:15px; border:1px solid #e2e8f0; border-radius:12px; }
+.fc-config-title { margin-bottom:11px; }
+.fc-config-title h3 { margin:0; color:#334155; font-size:15px; }
+.fc-config-row { display:grid; grid-template-columns:2fr 1fr 1.2fr auto; gap:9px; margin-bottom:8px; }
+.fc-rule-row { display:grid; grid-template-columns:1.2fr 1fr 1fr 1fr auto; gap:9px; margin-bottom:8px; }
+.fc-rule-row.fc-gender-rule { grid-template-columns:1fr 1fr 1fr auto; }
+.fc-installment-number { display:block; margin-top:8px; color:#1d4ed8; font-size:28px; }
+.fc-gender-head, .fc-fee-module-row { display:grid; grid-template-columns:2fr 1fr 1fr .8fr auto; gap:10px; align-items:center; }
+.fc-gender-head { padding:9px 12px; color:#475569; background:#eff6ff; border-radius:9px; font-size:12px; }
+.fc-fee-module { margin-top:11px; padding:12px; border:1px solid #dbeafe; border-radius:11px; }
+.fc-inline-check { flex-direction:row !important; align-items:center; }
+.fc-remove { width:34px; height:34px; border:1px solid #fecaca; border-radius:7px; color:#dc2626; background:#fff; cursor:pointer; }
+.fc-module-installments { margin:12px 0 0 25px; padding:11px; border-left:3px solid #bfdbfe; background:#f8fafc; }
+.fc-add-module { margin:14px 0; padding:10px 14px; border:1px dashed #60a5fa; border-radius:9px; color:#1d4ed8; background:#eff6ff; cursor:pointer; font-weight:700; }
+.fc-composition-total { display:flex; justify-content:flex-end; gap:24px; margin:12px 0; padding:12px; color:#334155; background:#f1f5f9; border-radius:9px; }
+@media (max-width:800px) { .fc-summary,.fc-plan-base { grid-template-columns:1fr; } .fc-modal { grid-template-columns:1fr; } .fc-config-row,.fc-rule-row,.fc-gender-head,.fc-fee-module-row { grid-template-columns:1fr; } .fc-full { grid-column:auto; } }

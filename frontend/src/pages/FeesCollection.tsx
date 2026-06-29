@@ -1,256 +1,102 @@
-import { useState } from "react";
-import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
+import { FormEvent, useEffect, useMemo, useState } from "react";
+import { useParams } from "react-router-dom";
+import { listClasses, SchoolClass } from "../api/classes";
+import { Enrollment, listEnrollments } from "../api/enrollments";
+import { ComplianceReport, createPayment, FeePayment, FeePlan, getCompliance, listFeePlans, listPayments } from "../api/finance";
 
-/* ── Chart data ── */
-const CHART_DATA = [
-  { month:"Jan", amount:1200 }, { month:"Feb", amount:1800 },
-  { month:"Mar", amount:1400 }, { month:"Apr", amount:2200 },
-  { month:"May", amount:2800 }, { month:"Jun", amount:3200 },
-  { month:"Jul", amount:4100 }, { month:"Aug", amount:7200 },
-  { month:"Sep", amount:5100 }, { month:"Oct", amount:4400 },
-  { month:"Nov", amount:5600 }, { month:"Dec", amount:4800 },
-];
-
-/* ── Stat cards ── */
-const STATS = [
-  { label:"Total Amount",       value:"$126,450", trend:"+15%", up:true  },
-  { label:"Total Tuition",      value:"$67,200",  trend:"+15%", up:true  },
-  { label:"Total Activities",   value:"$8,000",   trend:"-8%",  up:false },
-  { label:"Total Miscellaneous",value:"$6,150",   trend:"-8%",  up:false },
-];
-
-/* ── Students fees ── */
-const FEES = [
-  { id:"2015-02-017", name:"Sophia Wilson",   class:"11A",           tuition:4500, activities:300, misc:200, amount:5000,  status:"Paid",    avatar:"SW", color:"#fce7f3", tc:"#be185d" },
-  { id:"2015-01-016", name:"Ethan Lee",       class:"10B",           tuition:4500, activities:250, misc:150, amount:4900,  status:"Pending", avatar:"EL", color:"#dbeafe", tc:"#1d4ed8" },
-  { id:"2015-03-012", name:"Michael Brown",   class:"12 AP Calculus",tuition:4800, activities:300, misc:200, amount:5300,  status:"Paid",    avatar:"MB", color:"#d1fae5", tc:"#065f46" },
-  { id:"2015-01-019", name:"Ava Smith",       class:"9B",            tuition:4500, activities:250, misc:100, amount:4850,  status:"Overdue", avatar:"AS", color:"#fef3c7", tc:"#92400e" },
-  { id:"2015-01-004", name:"Lucas Johnson",   class:"11A",           tuition:4500, activities:300, misc:200, amount:5000,  status:"Paid",    avatar:"LJ", color:"#ede9fe", tc:"#5b21b6" },
-  { id:"2015-03-015", name:"Isabella Garcia", class:"8B",            tuition:4200, activities:200, misc:150, amount:4550,  status:"Pending", avatar:"IG", color:"#e0f2fe", tc:"#0369a1" },
-  { id:"2016-02-008", name:"Liam Thompson",   class:"10B",           tuition:4500, activities:250, misc:200, amount:4950,  status:"Paid",    avatar:"LT", color:"#f0fdf4", tc:"#14532d" },
-  { id:"2016-01-021", name:"Evelyn Mitchell", class:"10A",           tuition:4500, activities:300, misc:150, amount:4950,  status:"Overdue", avatar:"EM", color:"#fee2e2", tc:"#991b1b" },
-  { id:"2014-02-022", name:"Alexander Perez", class:"12",            tuition:4800, activities:250, misc:200, amount:5250,  status:"Paid",    avatar:"AP", color:"#fce7f3", tc:"#be185d" },
-  { id:"2017-01-019", name:"Harper Nelson",   class:"9B",            tuition:4200, activities:200, misc:100, amount:4500,  status:"Pending", avatar:"HN", color:"#dbeafe", tc:"#1d4ed8" },
-];
-
-const STATUS_STYLES = {
-  Paid:    { color:"#0ea5e9", bg:"#e0f2fe"  },
-  Pending: { color:"#f59e0b", bg:"#fef3c7"  },
-  Overdue: { color:"#ef4444", bg:"#fee2e2"  },
-};
-
-const CLASSES  = ["All Classes","8B","9B","10A","10B","11A","12","12 AP Calculus"];
-const STATUSES = ["All Status","Paid","Pending","Overdue"];
-const PAGE_SIZE = 6;
-
-/* ── Custom tooltip ── */
-function ChartTooltip({ active, payload, label }: { active?: boolean; payload?: any[]; label?: string }) {
-  if (!active || !payload?.length) return null;
-  return (
-    <div className="fc-tooltip">
-      <div className="fc-tooltip-val">${payload[0].value.toLocaleString()}</div>
-      <div className="fc-tooltip-date">{label} 19, 2030</div>
-    </div>
-  );
-}
-
-/* ── Mini sparkline icon ── */
-function Sparkline() {
-  return (
-    <svg width="60" height="28" viewBox="0 0 60 28">
-      <polyline points="0,20 12,14 24,18 36,8 48,12 60,6"
-        fill="none" stroke="rgba(255,255,255,0.7)" strokeWidth="2" strokeLinecap="round"/>
-    </svg>
-  );
-}
+type Tab = "payments" | "compliance";
+const money = (value: string | number) => `${Number(value || 0).toLocaleString("fr-FR")} FCFA`;
 
 export default function FeesCollection() {
-  const [search,      setSearch]      = useState("");
-  const [classFilter, setClassFilter] = useState("All Classes");
-  const [statusFilter,setStatusFilter]= useState("All Status");
-  const [selected,    setSelected]    = useState(new Set());
-  const [page,        setPage]        = useState(1);
+  const { schoolId = "" } = useParams();
+  const [tab, setTab] = useState<Tab>("payments");
+  const [classes, setClasses] = useState<SchoolClass[]>([]);
+  const [enrollments, setEnrollments] = useState<Enrollment[]>([]);
+  const [plans, setPlans] = useState<FeePlan[]>([]);
+  const [payments, setPayments] = useState<FeePayment[]>([]);
+  const [classId, setClassId] = useState<number>(0);
+  const [target, setTarget] = useState("");
+  const [paymentItemId, setPaymentItemId] = useState(0);
+  const [paymentEnrollmentId, setPaymentEnrollmentId] = useState(0);
+  const [paymentInstallmentId, setPaymentInstallmentId] = useState(0);
+  const [studentSearch, setStudentSearch] = useState("");
+  const [studentPickerOpen, setStudentPickerOpen] = useState(false);
+  const [report, setReport] = useState<ComplianceReport | null>(null);
+  const [statusFilter, setStatusFilter] = useState<"all" | "ok" | "late">("all");
+  const [showPayment, setShowPayment] = useState(false);
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
 
-  const filtered = FEES.filter(f => {
-    const matchSearch = f.name.toLowerCase().includes(search.toLowerCase()) || f.id.includes(search);
-    const matchClass  = classFilter  === "All Classes" || f.class === classFilter;
-    const matchStatus = statusFilter === "All Status"  || f.status === statusFilter;
-    return matchSearch && matchClass && matchStatus;
-  });
+  const load = async () => {
+    try {
+      const [classRows, enrollmentRows, planRows, paymentRows] = await Promise.all([
+        listClasses(schoolId), listEnrollments(schoolId), listFeePlans(schoolId), listPayments(schoolId),
+      ]);
+      setClasses(classRows); setEnrollments(enrollmentRows); setPlans(planRows); setPayments(paymentRows);
+      setClassId((current) => current || classRows[0]?.id || 0);
+    } catch (e) { setError(e instanceof Error ? e.message : "Chargement impossible."); }
+  };
+  useEffect(() => { void load(); }, [schoolId]);
 
-  const totalPages = Math.ceil(filtered.length / PAGE_SIZE);
-  const paginated  = filtered.slice((page-1)*PAGE_SIZE, page*PAGE_SIZE);
+  const selectedPlan = plans.find((plan) => plan.school_class === classId) ?? null;
+  const classEnrollments = enrollments.filter((item) => item.school_class === classId && item.status === "active");
+  const normalizedStudentSearch = studentSearch.trim().toLocaleLowerCase("fr");
+  const filteredClassEnrollments = classEnrollments.filter((item) => !normalizedStudentSearch ||
+    item.student_name.toLocaleLowerCase("fr").includes(normalizedStudentSearch) ||
+    item.enrollment_number.toLocaleLowerCase("fr").includes(normalizedStudentSearch));
+  const selectedEnrollment = classEnrollments.find((item) => item.id === paymentEnrollmentId) ?? null;
+  const baseAmount = (item: NonNullable<FeePlan["items"]>[number]) => Number(selectedEnrollment?.student_gender === "F" ? item.female_amount : item.male_amount);
+  const paidAmount = (itemId: number, installmentId?: number) => payments.filter((row) => row.enrollment === selectedEnrollment?.id && row.class_fee === itemId && (installmentId === undefined || row.installment === installmentId)).reduce((sum, row) => sum + Number(row.amount), 0);
+  const itemRemaining = (item: NonNullable<FeePlan["items"]>[number]) => Math.max(0, baseAmount(item) - paidAmount(item.id));
+  const availableItems = selectedPlan?.items.filter((item) => itemRemaining(item) > 0) ?? [];
+  const selectedPaymentItem = availableItems.find((item) => item.id === paymentItemId) ?? availableItems[0] ?? null;
+  const installmentRemaining = (installment: NonNullable<typeof selectedPaymentItem>["installments"][number]) => Math.max(0, baseAmount(selectedPaymentItem!) * Number(installment.percentage) / 100 - paidAmount(selectedPaymentItem!.id, installment.id));
+  const availableInstallments = selectedPaymentItem?.installments.filter((row) => installmentRemaining(row) > 0) ?? [];
+  const selectedInstallment = availableInstallments.find((row) => row.id === paymentInstallmentId) ?? availableInstallments[0] ?? null;
+  const expectedPayment = selectedPaymentItem ? (selectedPaymentItem.payable_in_installments && selectedInstallment ? baseAmount(selectedPaymentItem) * Number(selectedInstallment.percentage) / 100 : baseAmount(selectedPaymentItem)) : 0;
+  const alreadyPaid = selectedPaymentItem ? (selectedPaymentItem.payable_in_installments && selectedInstallment ? paidAmount(selectedPaymentItem.id, selectedInstallment.id) : paidAmount(selectedPaymentItem.id)) : 0;
+  const paymentRemaining = Math.max(0, expectedPayment - alreadyPaid);
+  const filteredReport = report?.students.filter((row) => statusFilter === "all" || (statusFilter === "ok" ? row.is_compliant : !row.is_compliant)) ?? [];
+  const collected = useMemo(() => payments.reduce((sum, row) => sum + Number(row.amount), 0), [payments]);
 
-  const toggleAll = () => selected.size === paginated.length
-    ? setSelected(new Set())
-    : setSelected(new Set(paginated.map(f => f.id)));
+  useEffect(() => {
+    const firstItem = selectedPlan?.items[0];
+    if (!firstItem) { setTarget(""); setPaymentItemId(0); return; }
+    setTarget(`item:${firstItem.id}`); setPaymentItemId(firstItem.id);
+  }, [selectedPlan?.id]);
 
-  const toggleOne = id => setSelected(prev => {
-    const next = new Set(prev);
-    next.has(id) ? next.delete(id) : next.add(id);
-    return next;
-  });
+  useEffect(() => {
+    if (!classId || !target || tab !== "compliance") return;
+    setReport(null); setError("");
+    void getCompliance(schoolId, classId, target).then(setReport).catch((e) => setError(e instanceof Error ? e.message : "Rapport impossible."));
+  }, [schoolId, classId, target, tab, plans.length, payments.length]);
 
-  const handleSearch = v => { setSearch(v); setPage(1); };
+  const submitPayment = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault(); setError(""); const form = new FormData(event.currentTarget);
+    try {
+      await createPayment(schoolId, {
+        enrollment: Number(form.get("enrollment")), class_fee: Number(form.get("class_fee")),
+        installment: selectedPaymentItem?.payable_in_installments ? selectedInstallment?.id : null,
+        amount: Number(form.get("amount")), paid_on: String(form.get("paid_on")), method: String(form.get("method")),
+        reference: String(form.get("reference") ?? ""), notes: String(form.get("notes") ?? ""),
+      });
+      setShowPayment(false); setMessage("Paiement enregistré avec succès."); await load();
+    } catch (e) { setError(e instanceof Error ? e.message : "Paiement impossible."); }
+  };
 
-  return (
-    <div className="fc-root">
-
-      {/* ── Top section: chart + stat cards ── */}
-      <div className="fc-top">
-
-        {/* Area chart */}
-        <div className="fc-chart-card">
-          <div className="fc-chart-header">
-            <span className="fc-chart-title">Collecte des frais</span>
-            <span className="fc-dots">···</span>
-          </div>
-          <ResponsiveContainer width="100%" height={200}>
-            <AreaChart data={CHART_DATA} margin={{ top:10, right:10, left:0, bottom:0 }}>
-              <defs>
-                <linearGradient id="fcGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%"  stopColor="#f0b429" stopOpacity={0.4}/>
-                  <stop offset="95%" stopColor="#f0b429" stopOpacity={0.02}/>
-                </linearGradient>
-              </defs>
-              <CartesianGrid strokeDasharray="3 3" stroke="#f1f3f7" vertical={false}/>
-              <XAxis dataKey="month" axisLine={false} tickLine={false} tick={{ fill:"#9ca3af", fontSize:12 }}/>
-              <YAxis domain={[0,7500]} ticks={[0,1000,2500,5000,7500]} axisLine={false} tickLine={false} tick={{ fill:"#9ca3af", fontSize:11 }}/>
-              <Tooltip content={<ChartTooltip />} cursor={{ stroke:"#f0b429", strokeWidth:1, strokeDasharray:"4 4" }}/>
-              <Area type="monotone" dataKey="amount" stroke="#f0b429" strokeWidth={2.5} fill="url(#fcGrad)" dot={false} activeDot={{ r:6, fill:"#f0b429", stroke:"white", strokeWidth:2 }}/>
-            </AreaChart>
-          </ResponsiveContainer>
-        </div>
-
-        {/* Stat cards */}
-        <div className="fc-stats">
-          {STATS.map((s, i) => (
-            <div key={i} className="fc-stat-card">
-              <div className="fc-stat-top">
-                <Sparkline />
-                <span className={`fc-stat-trend ${s.up?"up":"down"}`}>
-                  {s.up?"↑":"↓"} {s.trend}
-                </span>
-              </div>
-              <div className="fc-stat-value">{s.value}</div>
-              <div className="fc-stat-label">{s.label}</div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* ── Fees table ── */}
-      <div className="fc-table-section">
-
-        {/* Table header */}
-        <div className="fc-table-header">
-          <span className="fc-chart-title">Collecte des frais</span>
-          <div className="fc-table-controls">
-            {/* Search */}
-            <div className="fc-search-box">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" strokeWidth="2">
-                <circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/>
-              </svg>
-              <input className="fc-search-input" placeholder="Rechercher par nom ou identifiant" value={search} onChange={e => handleSearch(e.target.value)}/>
-            </div>
-            {/* Date */}
-            <div className="fc-filter-btn">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="2">
-                <rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>
-              </svg>
-              Today
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="2.5"><path d="M6 9l6 6 6-6"/></svg>
-            </div>
-            {/* Class filter */}
-            <select className="fc-select" value={classFilter} onChange={e=>{setClassFilter(e.target.value);setPage(1);}}>
-              {CLASSES.map(c=><option key={c}>{c}</option>)}
-            </select>
-            {/* Status filter */}
-            <select className="fc-select" value={statusFilter} onChange={e=>{setStatusFilter(e.target.value);setPage(1);}}>
-              {STATUSES.map(s=><option key={s}>{s}</option>)}
-            </select>
-          </div>
-        </div>
-
-        {/* Table */}
-        <div className="fc-table-wrap">
-          <table className="fc-table">
-            <thead>
-              <tr>
-                <th style={{width:40}}>
-                  <input type="checkbox" className="st-checkbox"
-                    checked={selected.size===paginated.length && paginated.length>0}
-                    onChange={toggleAll}/>
-                </th>
-                <th>Nom de l’élève</th>
-                <th>Classe</th>
-                <th>Frais de scolarité</th>
-                <th>Frais d’activités</th>
-                <th>Divers</th>
-                <th>Montant</th>
-                <th>Statut</th>
-                <th>Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              {paginated.map((f, i) => {
-                const isChecked = selected.has(f.id);
-                const st = STATUS_STYLES[f.status];
-                return (
-                  <tr key={f.id} className={isChecked?"row-selected": i%2===1?"row-alt":""}>
-                    <td><input type="checkbox" className="st-checkbox" checked={isChecked} onChange={()=>toggleOne(f.id)}/></td>
-                    <td>
-                      <div className="fc-student-cell">
-                        <div className="fc-avatar" style={{background:f.color, color:f.tc}}>{f.avatar}</div>
-                        <div>
-                          <div className="fc-student-name">{f.name}</div>
-                          <div className="fc-student-id">{f.id}</div>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="fc-td">{f.class}</td>
-                    <td className="fc-td">${f.tuition.toLocaleString()}</td>
-                    <td className="fc-td">${f.activities}</td>
-                    <td className="fc-td">${f.misc}</td>
-                    <td className="fc-td fc-amount">${f.amount.toLocaleString()}</td>
-                    <td>
-                      <span className="fc-status" style={{color:st.color, background:st.bg}}>
-                        <span className="fc-status-dot" style={{background:st.color}}/>
-                        {f.status}
-                      </span>
-                    </td>
-                    <td>
-                      <div className="fc-actions">
-                        <button className="fc-action-btn" title="Modifier">
-                          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" strokeWidth="2">
-                            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-                            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
-                          </svg>
-                        </button>
-                        <button className="fc-action-btn" title="Supprimer">
-                          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" strokeWidth="2">
-                            <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/>
-                            <path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/>
-                          </svg>
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-
-        {/* Pagination */}
-        {totalPages > 1 && (
-          <div className="pagination" style={{marginTop:16}}>
-            <button className="pag-btn" onClick={()=>setPage(p=>Math.max(1,p-1))} disabled={page===1}>← Previous</button>
-            <span className="pag-info">Page {page} of {totalPages}</span>
-            <button className="pag-btn" onClick={()=>setPage(p=>Math.min(totalPages,p+1))} disabled={page===totalPages}>Suivant →</button>
-          </div>
-        )}
-      </div>
+  return <div className="fc-root">
+    <div className="fc-page-head"><div><h1>Gestion de la scolarité</h1><p>Barèmes, tranches, encaissements et suivi des élèves.</p></div><button className="btn-primary" onClick={() => { setStudentSearch(""); setStudentPickerOpen(false); setPaymentEnrollmentId(0); setPaymentItemId(0); setPaymentInstallmentId(0); setShowPayment(true); }} disabled={!plans.length}>+ Enregistrer un paiement</button></div>
+    {error && <div className="form-error">{error}</div>}{message && <div className="form-success">{message}</div>}
+    <div className="fc-summary">
+      <div><span>Montant encaissé</span><strong>{money(collected)}</strong></div><div><span>Paiements enregistrés</span><strong>{payments.length}</strong></div><div><span>Classes configurées</span><strong>{plans.length} / {classes.length}</strong></div>
     </div>
-  );
+    <div className="fc-tabs"><button className={tab === "payments" ? "active" : ""} onClick={() => setTab("payments")}>Paiements</button><button className={tab === "compliance" ? "active" : ""} onClick={() => setTab("compliance")}>En règle / non en règle</button></div>
+
+    {tab === "payments" && <section className="fc-table-section"><div className="fc-table-header"><span className="fc-chart-title">Historique des paiements</span></div><div className="fc-table-wrap"><table className="fc-table"><thead><tr><th>Date</th><th>Élève</th><th>Classe</th><th>Rubrique</th><th>Tranche</th><th>Montant</th><th>Mode</th><th>Référence</th></tr></thead><tbody>{payments.map((row) => <tr key={row.id}><td>{row.paid_on}</td><td><b>{row.student_name}</b><small className="fc-block">{row.enrollment_number}</small></td><td>{row.class_name}</td><td>{row.module_name}</td><td>{row.installment_name ?? "—"}</td><td className="fc-amount">{money(row.amount)}</td><td>{row.method_label}</td><td>{row.reference || "—"}</td></tr>)}</tbody></table>{!payments.length && <p className="fc-empty">Aucun paiement enregistré.</p>}</div></section>}
+
+    {tab === "compliance" && <section className="fc-table-section"><div className="fc-table-header"><span className="fc-chart-title">Situation des élèves</span><div className="fc-table-controls"><select className="fc-select" value={classId} onChange={(e) => setClassId(Number(e.target.value))}>{classes.map((row) => <option value={row.id} key={row.id}>{row.level_name} {row.series} — {row.name}</option>)}</select><select className="fc-select" value={target} onChange={(e) => setTarget(e.target.value)}>{selectedPlan?.items.flatMap((item) => [<option value={`item:${item.id}`} key={`item-${item.id}`}>{item.module_name} — total</option>, ...item.installments.map((row) => <option value={`installment:${row.id}`} key={`installment-${row.id}`}>{item.module_name} — {row.name}</option>)])}</select><select className="fc-select" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as typeof statusFilter)}><option value="all">Tous</option><option value="ok">En règle</option><option value="late">Non en règle</option></select></div></div>{report && <div className="fc-compliance-counts"><span className="ok">{report.compliant_count} en règle</span><span className="late">{report.non_compliant_count} non en règle</span><b>{report.target}</b></div>}<div className="fc-table-wrap"><table className="fc-table"><thead><tr><th>Matricule</th><th>Élève</th><th>Genre</th><th>Statut</th><th>À payer</th><th>Payé</th><th>Reste</th><th>Situation</th></tr></thead><tbody>{filteredReport.map((row) => <tr key={row.enrollment}><td>{row.enrollment_number}</td><td><b>{row.student_name}</b></td><td>{row.gender}</td><td>{row.student_status}</td><td>{money(row.expected)}</td><td>{money(row.paid)}</td><td>{money(row.balance)}</td><td><span className={`fc-status ${row.is_compliant ? "is-ok" : "is-late"}`}>{row.is_compliant ? "En règle" : "Non en règle"}</span></td></tr>)}</tbody></table></div></section>}
+
+    {showPayment && <div className="teacher-modal-backdrop" onMouseDown={() => setShowPayment(false)}><form className="teacher-modal fc-modal" onSubmit={submitPayment} onMouseDown={(e) => e.stopPropagation()}><button type="button" className="modal-close" onClick={() => setShowPayment(false)}>×</button><h2>Enregistrer un paiement</h2><label>Classe<select className="form-select" value={classId} onChange={(e) => { setClassId(Number(e.target.value)); setStudentSearch(""); setStudentPickerOpen(false); setPaymentEnrollmentId(0); setPaymentItemId(0); setPaymentInstallmentId(0); }}>{plans.map((plan) => <option value={plan.school_class} key={plan.id}>{plan.level_name} {plan.series} — {plan.class_name}</option>)}</select></label><label className="fc-full">Élève<div className={`fc-searchable-select${studentPickerOpen ? " open" : ""}`}><input className="form-input" value={studentSearch} onFocus={() => setStudentPickerOpen(true)} onBlur={() => window.setTimeout(() => setStudentPickerOpen(false), 150)} onChange={(e) => { setStudentSearch(e.target.value); setStudentPickerOpen(true); setPaymentEnrollmentId(0); setPaymentItemId(0); setPaymentInstallmentId(0); }} placeholder="Rechercher par nom, prénom ou matricule…" autoComplete="off" required /><span className="fc-select-chevron">⌄</span>{studentPickerOpen && <div className="fc-searchable-options">{filteredClassEnrollments.map((row) => <button type="button" key={row.id} className={row.id === paymentEnrollmentId ? "selected" : ""} onMouseDown={(e) => e.preventDefault()} onClick={() => { setPaymentEnrollmentId(row.id); setStudentSearch(`${row.student_name} — ${row.enrollment_number}`); setPaymentItemId(0); setPaymentInstallmentId(0); setStudentPickerOpen(false); }}><b>{row.student_name}</b><small>{row.enrollment_number}</small></button>)}{!filteredClassEnrollments.length && <span className="fc-no-option">Aucun élève trouvé</span>}</div>}</div><input type="hidden" name="enrollment" value={selectedEnrollment?.id ?? ""} /></label><label>Rubrique<select className="form-select" name="class_fee" value={selectedPaymentItem?.id ?? ""} onChange={(e) => { setPaymentItemId(Number(e.target.value)); setPaymentInstallmentId(0); }} required>{selectedPlan?.items.map((item) => { const paid = itemRemaining(item) <= 0; return <option value={item.id} key={item.id} disabled={paid}>{item.module_name}{paid ? " — Payée" : ` — reste ${money(itemRemaining(item))}`}</option>; })}</select></label><label>Tranche<select className="form-select" name="installment" value={selectedInstallment?.id ?? ""} onChange={(e) => setPaymentInstallmentId(Number(e.target.value))} disabled={!selectedPaymentItem?.payable_in_installments} required={Boolean(selectedPaymentItem?.payable_in_installments)}>{selectedPaymentItem?.installments.map((row) => { const paid = installmentRemaining(row) <= 0; return <option value={row.id} key={row.id} disabled={paid}>{row.name} ({row.percentage} %){paid ? " — Payée" : ` — reste ${money(installmentRemaining(row))}`}</option>; })}</select></label><div className="fc-payment-due fc-full"><span>Montant à payer</span><strong>{money(expectedPayment)}</strong><small>Déjà payé : {money(alreadyPaid)} · Reste : {money(paymentRemaining)}</small></div><label>Montant<input key={`${selectedEnrollment?.id}-${selectedPaymentItem?.id}-${selectedInstallment?.id}-${paymentRemaining}`} className="form-input" name="amount" type="number" min="1" max={paymentRemaining} step="0.01" defaultValue={paymentRemaining || ""} required disabled={!paymentRemaining} /></label><label>Date<input className="form-input" name="paid_on" type="date" defaultValue={new Date().toISOString().slice(0, 10)} required /></label><label>Mode<select className="form-select" name="method"><option value="especes">Espèces</option><option value="mobile_money">Mobile Money</option><option value="banque">Banque</option><option value="autre">Autre</option></select></label><label>Référence<input className="form-input" name="reference" /></label><label className="fc-full">Notes<textarea className="form-input" name="notes" /></label>{selectedEnrollment && !availableItems.length && <div className="form-success fc-full">Toutes les rubriques de cet élève sont entièrement payées.</div>}<button className="btn-primary fc-full" disabled={!selectedEnrollment || !paymentRemaining}>Enregistrer</button></form></div>}
+
+  </div>;
 }

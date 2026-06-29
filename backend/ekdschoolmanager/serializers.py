@@ -1,11 +1,23 @@
 import re
-from datetime import timedelta
+from decimal import Decimal
 
 from rest_framework import serializers
 from django.db import transaction
+from django.db.models import Sum
 from django.utils.text import slugify
 
-from .models import AcademicPeriod, AcademicYear, ClassSubject, CustomUser, School, SchoolClass, SchoolLevel, SchoolMembership, StudentEnrollment, Subject, TeacherClassAssignment, TeacherUnavailability
+from .models import AcademicSession, AcademicYear, ClassFeeItem, ClassSubject, CustomUser, ExpenseCategory, FeeInstallment, FeeModule, FeePayment, GradeGroup, GradeLine, GradeScheme, School, SchoolClass, SchoolExpense, SchoolLevel, SchoolMembership, StudentEnrollment, Subject, TeacherClassAssignment, TeacherUnavailability, TuitionFeePlan
+
+
+def normalize_togolese_phone(value):
+    digits = re.sub(r"\D", "", str(value or ""))
+    if digits.startswith("228"):
+        digits = digits[3:]
+    if len(digits) != 8:
+        raise serializers.ValidationError(
+            "Saisissez un numéro togolais de 8 chiffres, par exemple +228 90 12 34 56."
+        )
+    return f"+228{digits}"
 
 
 class CustomUserSerializer(serializers.ModelSerializer):
@@ -14,9 +26,11 @@ class CustomUserSerializer(serializers.ModelSerializer):
     phone = serializers.CharField(required=False, allow_blank=True, allow_null=True)
     gender_label = serializers.CharField(source="get_gender_display", read_only=True)
     role_label = serializers.CharField(source="get_role_display", read_only=True)
+    student_status_label = serializers.CharField(source="get_student_status_display", read_only=True)
+    year_result_label = serializers.CharField(source="get_year_result_display", read_only=True)
+    subjects = serializers.PrimaryKeyRelatedField(queryset=Subject.objects.all(), many=True, required=False)
+    subject_names = serializers.SlugRelatedField(source="subjects", slug_field="name", many=True, read_only=True)
     primary_subject_name = serializers.CharField(source="primary_subject.name", read_only=True)
-    secondary_subject_name = serializers.CharField(source="secondary_subject.name", read_only=True)
-    tertiary_subject_name = serializers.CharField(source="tertiary_subject.name", read_only=True)
     assigned_school_ids = serializers.SerializerMethodField()
     assigned_classes = serializers.SerializerMethodField()
     homeroom_classes = serializers.SerializerMethodField()
@@ -30,11 +44,10 @@ class CustomUserSerializer(serializers.ModelSerializer):
     class Meta:
         model = CustomUser
         fields = [
-            "id", "username", "last_name", "first_names", "email", "phone", "gender",
-            "gender_label", "role", "role_label", "primary_subject",
-            "primary_subject_name", "secondary_subject", "secondary_subject_name",
-            "tertiary_subject", "tertiary_subject_name", "is_active", "is_archived",
-            "date_of_birth", "address", "is_superuser", "school_ids", "date_joined",
+            "id", "username", "last_name", "first_names", "email", "phone", "profession", "gender",
+            "gender_label", "role", "role_label", "subjects", "subject_names", "primary_subject", "primary_subject_name", "is_active", "is_archived",
+            "date_of_birth", "address", "health_information", "enrollment_number", "student_status", "student_status_label",
+            "year_result", "year_result_label", "is_superuser", "school_ids", "date_joined",
             "assigned_school_ids", "assigned_classes", "homeroom_classes", "unavailability_schedule",
         ]
         read_only_fields = ["id", "is_superuser", "date_joined"]
@@ -62,16 +75,7 @@ class CustomUserSerializer(serializers.ModelSerializer):
     def validate_phone(self, value):
         if not value:
             return None
-        digits = re.sub(r"\D", "", value)
-        if digits.startswith("228"):
-            digits = digits[3:]
-        if len(digits) != 8:
-            raise serializers.ValidationError(
-                "Saisissez un numéro togolais de 8 chiffres, par exemple +228 90 12 34 56."
-            )
-
-        phone = f"+228{digits}"
-        return phone
+        return normalize_togolese_phone(value)
 
     def validate(self, attrs):
         view = self.context.get("view")
@@ -86,19 +90,22 @@ class CustomUserSerializer(serializers.ModelSerializer):
         if role == CustomUser.Role.TEACHER and not gender:
             raise serializers.ValidationError({"gender": "Le genre est obligatoire pour un enseignant."})
 
-        subjects = [attrs.get(name, getattr(self.instance, name, None)) for name in (
-            "primary_subject", "secondary_subject", "tertiary_subject"
-        )]
-        selected = [subject.pk for subject in subjects if subject]
-        if len(selected) != len(set(selected)):
-            raise serializers.ValidationError("Les matières sélectionnées doivent être différentes.")
-        if selected and is_teacher_endpoint:
+        subjects = attrs.get("subjects")
+        if subjects is not None and is_teacher_endpoint:
             school = view.get_school()
-            invalid_subjects = [subject.name for subject in subjects if subject and (subject.school_id != school.id or not subject.is_active)]
+            invalid_subjects = [subject.name for subject in subjects if subject.school_id != school.id or not subject.is_active]
             if invalid_subjects:
                 raise serializers.ValidationError({
                     "subjects": f"Matière indisponible dans cette école : {', '.join(invalid_subjects)}."
                 })
+        selected_subject_ids = {subject.id for subject in subjects} if subjects is not None else (
+            set(self.instance.subjects.values_list("id", flat=True)) if self.instance else set()
+        )
+        primary_subject = attrs.get("primary_subject", getattr(self.instance, "primary_subject", None))
+        if primary_subject and primary_subject.id not in selected_subject_ids:
+            raise serializers.ValidationError({"primary_subject": "La matière principale doit être sélectionnée dans les matières enseignées."})
+        if is_teacher_endpoint and selected_subject_ids and not primary_subject:
+            raise serializers.ValidationError({"primary_subject": "Sélectionnez la matière principale de l’enseignant."})
         return attrs
 
     def get_assigned_school_ids(self, user):
@@ -148,6 +155,7 @@ class CustomUserSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         validated_data.pop("school_ids", None)
+        subjects = validated_data.pop("subjects", [])
         user = CustomUser(**validated_data)
         view = self.context.get("view")
         is_teacher_endpoint = (
@@ -157,6 +165,7 @@ class CustomUserSerializer(serializers.ModelSerializer):
         initial_password = user.username if is_teacher_endpoint else f"{user.username}@"
         user.set_password(initial_password)
         user.save()
+        user.subjects.set(subjects)
         return user
 
 
@@ -258,22 +267,70 @@ class SubjectSerializer(serializers.ModelSerializer):
         return attrs
 
 
-class AcademicPeriodSerializer(serializers.ModelSerializer):
+class AcademicSessionSerializer(serializers.ModelSerializer):
+    classes = serializers.PrimaryKeyRelatedField(queryset=SchoolClass.objects.all(), many=True)
+    class_names = serializers.SlugRelatedField(source="classes", slug_field="name", many=True, read_only=True)
+
     class Meta:
-        model = AcademicPeriod
-        fields = ["id", "number", "name", "start_date", "end_date", "is_active", "is_closed"]
-        read_only_fields = ["id", "number", "is_active", "is_closed"]
+        model = AcademicSession
+        fields = ["id", "academic_year", "name", "label", "start_date", "end_date", "classes", "class_names", "is_active", "is_closed", "created_at"]
+        read_only_fields = ["id", "academic_year", "is_closed", "created_at"]
+
+    def validate_name(self, value):
+        name = " ".join(value.split())
+        academic_year = self.context["academic_year"]
+        queryset = AcademicSession.objects.filter(academic_year=academic_year, name__iexact=name)
+        if self.instance:
+            queryset = queryset.exclude(pk=self.instance.pk)
+        if queryset.exists():
+            raise serializers.ValidationError("Une session avec ce nom existe déjà dans cette année académique.")
+        return name
+
+    def validate_label(self, value):
+        return " ".join(value.split())
+
+    def validate(self, attrs):
+        academic_year = self.context["academic_year"]
+        if self.instance and self.instance.is_closed and attrs:
+            raise serializers.ValidationError("Une session clôturée ne peut plus être modifiée.")
+        if attrs.get("is_active") and ((self.instance and self.instance.is_closed) or not academic_year.is_active or academic_year.is_closed):
+            raise serializers.ValidationError({"is_active": "Seule une session de l’année académique active peut être activée."})
+        classes = attrs.get("classes")
+        if classes is not None:
+            invalid = [school_class.name for school_class in classes if school_class.academic_year_id != academic_year.id or school_class.school_id != academic_year.school_id]
+            if invalid:
+                raise serializers.ValidationError({"classes": f"Classes hors de cette année académique : {', '.join(invalid)}."})
+            if not classes:
+                raise serializers.ValidationError({"classes": "Sélectionnez au moins une classe."})
+            will_be_active = attrs.get("is_active", getattr(self.instance, "is_active", True))
+            if will_be_active:
+                conflicts = AcademicSession.objects.filter(
+                    academic_year=academic_year, is_active=True, classes__in=classes,
+                )
+                if self.instance:
+                    conflicts = conflicts.exclude(pk=self.instance.pk)
+                conflicting_class_ids = list(conflicts.values_list("classes__id", flat=True).distinct())
+                if conflicting_class_ids:
+                    conflicting_classes = SchoolClass.objects.filter(
+                        id__in=conflicting_class_ids,
+                    ).select_related("level").order_by("level__order", "series", "group")
+                    conflicting_names = [
+                        " ".join(part for part in (school_class.level.name, school_class.series, school_class.group) if part)
+                        for school_class in conflicting_classes
+                    ]
+                    raise serializers.ValidationError({
+                        "classes": f"Ces classes appartiennent déjà à une session active : {', '.join(conflicting_names)}."
+                    })
+        return attrs
 
 
 class AcademicYearSerializer(serializers.ModelSerializer):
-    periods = AcademicPeriodSerializer(many=True, required=False)
-    division_label = serializers.CharField(source="get_division_system_display", read_only=True)
-
+    sessions = AcademicSessionSerializer(many=True, read_only=True)
     class Meta:
         model = AcademicYear
         fields = [
-            "id", "school", "name", "start_date", "end_date", "division_system",
-            "division_label", "is_active", "is_closed", "periods", "created_at",
+            "id", "school", "name", "start_date", "end_date",
+            "is_active", "is_closed", "sessions", "created_at",
         ]
         read_only_fields = ["id", "school", "is_closed", "created_at"]
 
@@ -285,67 +342,268 @@ class AcademicYearSerializer(serializers.ModelSerializer):
         end = attrs.get("end_date", getattr(self.instance, "end_date", None))
         if start and end and end <= start:
             raise serializers.ValidationError({"end_date": "La date de fin doit suivre la date de début."})
-        if self.instance and "division_system" in attrs and attrs["division_system"] != self.instance.division_system:
-            raise serializers.ValidationError({"division_system": "Le découpage ne peut plus être changé après création."})
         if self.instance and self.instance.is_closed and attrs:
             raise serializers.ValidationError("Une année clôturée ne peut plus être modifiée.")
-        periods = attrs.get("periods")
-        division = attrs.get("division_system", getattr(self.instance, "division_system", None))
-        if self.instance and periods is not None and self.instance.periods.filter(is_closed=True).exists():
-            raise serializers.ValidationError({"periods": "Les périodes ne peuvent plus être modifiées après une clôture."})
-        if periods is not None:
-            expected = 3 if division == AcademicYear.DivisionSystem.TRIMESTER else 2
-            if len(periods) != expected:
-                raise serializers.ValidationError({"periods": f"Ce découpage exige exactement {expected} périodes."})
-            ordered = sorted(periods, key=lambda period: period["start_date"])
-            for index, period in enumerate(ordered):
-                if period["end_date"] < period["start_date"]:
-                    raise serializers.ValidationError({"periods": f"Les dates de la période {index + 1} sont invalides."})
-                if start and end and (period["start_date"] < start or period["end_date"] > end):
-                    raise serializers.ValidationError({"periods": f"La période {index + 1} doit être comprise dans l’année académique."})
-                if index and ordered[index - 1]["end_date"] >= period["start_date"]:
-                    raise serializers.ValidationError({"periods": "Les périodes ne doivent pas se chevaucher."})
+        return attrs
+
+
+class FeeInstallmentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = FeeInstallment
+        fields = ["id", "name", "percentage", "due_date", "order"]
+        read_only_fields = ["id"]
+
+
+class ClassFeeItemSerializer(serializers.ModelSerializer):
+    module_name = serializers.CharField(source="fee_module.name")
+    installments = FeeInstallmentSerializer(many=True, required=False)
+
+    class Meta:
+        model = ClassFeeItem
+        fields = ["id", "module_name", "male_amount", "female_amount", "payable_in_installments", "installments"]
+        read_only_fields = ["id"]
+
+
+class TuitionFeePlanSerializer(serializers.ModelSerializer):
+    items = ClassFeeItemSerializer(many=True)
+    class_name = serializers.CharField(source="school_class.name", read_only=True)
+    level_name = serializers.CharField(source="school_class.level.name", read_only=True)
+    series = serializers.CharField(source="school_class.series", read_only=True)
+
+    class Meta:
+        model = TuitionFeePlan
+        fields = ["id", "school", "academic_year", "school_class", "class_name", "level_name", "series", "items", "created_at", "updated_at"]
+        read_only_fields = ["id", "school", "academic_year", "created_at", "updated_at"]
+
+    def validate_school_class(self, school_class):
+        if school_class.school_id != self.context["school"].id or school_class.academic_year_id != self.context["academic_year"].id:
+            raise serializers.ValidationError("Cette classe ne correspond pas à l’école et à l’année sélectionnées.")
+        return school_class
+
+    def validate(self, attrs):
+        items = attrs.get("items", [])
+        names = [item["fee_module"]["name"].strip().casefold() for item in items]
+        if not items:
+            raise serializers.ValidationError({"items": "Ajoutez au moins une rubrique de frais."})
+        if len(names) != len(set(names)):
+            raise serializers.ValidationError({"items": "Chaque rubrique doit avoir un nom différent."})
+        for item in items:
+            installments = item.get("installments", [])
+            if item.get("payable_in_installments"):
+                if not installments or sum(row["percentage"] for row in installments) != 100:
+                    raise serializers.ValidationError({"items": f"Les tranches de « {item['fee_module']['name']} » doivent totaliser 100 %."})
+            elif installments:
+                raise serializers.ValidationError({"items": f"La rubrique « {item['fee_module']['name']} » n’est pas marquée payable en tranches."})
+        return attrs
+
+    def save_items(self, plan, items):
+        for item in items:
+            module_data = item.pop("fee_module")
+            installments = item.pop("installments", [])
+            name = " ".join(module_data["name"].split())
+            module = FeeModule.objects.filter(school=plan.school, academic_year=plan.academic_year, name__iexact=name).first()
+            if module is None:
+                module = FeeModule.objects.create(school=plan.school, academic_year=plan.academic_year, name=name)
+            class_fee = ClassFeeItem.objects.create(plan=plan, fee_module=module, **item)
+            FeeInstallment.objects.bulk_create([FeeInstallment(class_fee=class_fee, **row) for row in installments])
+
+    def create(self, validated_data):
+        items = validated_data.pop("items")
+        with transaction.atomic():
+            plan = TuitionFeePlan.objects.create(**validated_data)
+            self.save_items(plan, items)
+        return plan
+
+    def update(self, instance, validated_data):
+        items = validated_data.pop("items", None)
+        with transaction.atomic():
+            for field, value in validated_data.items():
+                setattr(instance, field, value)
+            instance.save()
+            if items is not None:
+                if instance.items.filter(payments__isnull=False).exists():
+                    raise serializers.ValidationError({"items": "La composition ne peut plus être remplacée après un paiement."})
+                instance.items.all().delete()
+                self.save_items(instance, items)
+        return instance
+
+
+class FeePaymentSerializer(serializers.ModelSerializer):
+    student_name = serializers.CharField(source="enrollment.student.get_full_name", read_only=True)
+    enrollment_number = serializers.CharField(source="enrollment.enrollment_number", read_only=True)
+    class_name = serializers.CharField(source="enrollment.school_class.name", read_only=True)
+    installment_name = serializers.CharField(source="installment.name", read_only=True)
+    module_name = serializers.CharField(source="class_fee.fee_module.name", read_only=True)
+    method_label = serializers.CharField(source="get_method_display", read_only=True)
+    received_by_name = serializers.CharField(source="received_by.get_full_name", read_only=True)
+
+    class Meta:
+        model = FeePayment
+        fields = ["id", "enrollment", "student_name", "enrollment_number", "class_name", "class_fee", "module_name", "installment", "installment_name", "amount", "paid_on", "method", "method_label", "reference", "notes", "received_by_name", "created_at"]
+        read_only_fields = ["id", "created_at", "received_by_name"]
+
+    def validate(self, attrs):
+        enrollment = attrs["enrollment"]
+        school = self.context["school"]
+        academic_year = self.context["academic_year"]
+        if enrollment.school_id != school.id or enrollment.academic_year_id != academic_year.id:
+            raise serializers.ValidationError({"enrollment": "Cette inscription ne correspond pas à l’école et à l’année sélectionnées."})
+        if not enrollment.school_class_id:
+            raise serializers.ValidationError({"enrollment": "L’élève doit être affecté à une classe."})
+        class_fee = attrs["class_fee"]
+        if class_fee.plan.school_class_id != enrollment.school_class_id:
+            raise serializers.ValidationError({"class_fee": "Cette rubrique ne correspond pas à la classe de l’élève."})
+        installment = attrs.get("installment")
+        if installment and installment.class_fee_id != class_fee.id:
+            raise serializers.ValidationError({"installment": "Cette tranche ne correspond pas à la rubrique sélectionnée."})
+        if class_fee.payable_in_installments and not installment:
+            raise serializers.ValidationError({"installment": "Sélectionnez une tranche pour cette rubrique."})
+        if not class_fee.payable_in_installments and installment:
+            raise serializers.ValidationError({"installment": "Cette rubrique n’est pas payable en tranches."})
+        base_amount = class_fee.female_amount if enrollment.student.gender == CustomUser.Gender.FEMALE else class_fee.male_amount
+        expected = base_amount if installment is None else (
+            base_amount * installment.percentage / Decimal("100")
+        ).quantize(Decimal("0.01"))
+        payments = FeePayment.objects.filter(enrollment=enrollment, class_fee=class_fee)
+        if installment is not None:
+            payments = payments.filter(installment=installment)
+        paid = payments.aggregate(total=Sum("amount"))["total"] or Decimal("0")
+        remaining = max(expected - paid, Decimal("0"))
+        if remaining == 0:
+            raise serializers.ValidationError({"class_fee": "Cette rubrique ou cette tranche est déjà entièrement payée."})
+        if attrs["amount"] > remaining:
+            raise serializers.ValidationError({"amount": f"Le montant ne peut pas dépasser le reste à payer de {remaining} FCFA."})
+        return attrs
+
+
+class ExpenseCategorySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ExpenseCategory
+        fields = ["id", "name", "is_active"]
+        read_only_fields = ["id"]
+
+    def validate_name(self, value):
+        name = " ".join(value.split())
+        queryset = ExpenseCategory.objects.filter(school=self.context["school"], name__iexact=name)
+        if self.instance:
+            queryset = queryset.exclude(pk=self.instance.pk)
+        if queryset.exists():
+            raise serializers.ValidationError("Cette catégorie existe déjà.")
+        return name
+
+
+class SchoolExpenseSerializer(serializers.ModelSerializer):
+    category_name = serializers.CharField(source="category.name", read_only=True)
+    method_label = serializers.CharField(source="get_method_display", read_only=True)
+    recorded_by_name = serializers.CharField(source="recorded_by.get_full_name", read_only=True)
+
+    class Meta:
+        model = SchoolExpense
+        fields = ["id", "category", "category_name", "label", "description", "beneficiary", "amount", "expense_date", "method", "method_label", "reference", "recorded_by_name", "created_at", "updated_at"]
+        read_only_fields = ["id", "recorded_by_name", "created_at", "updated_at"]
+
+    def validate_category(self, category):
+        if category.school_id != self.context["school"].id or not category.is_active:
+            raise serializers.ValidationError("Cette catégorie n’est pas disponible dans cette école.")
+        return category
+
+    def validate_label(self, value):
+        return " ".join(value.split())
+
+
+class GradeLineConfigSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = GradeLine
+        fields = ["id", "name", "weight", "max_score", "order"]
+        read_only_fields = ["id"]
+
+
+class GradeGroupConfigSerializer(serializers.ModelSerializer):
+    lines = GradeLineConfigSerializer(many=True)
+
+    class Meta:
+        model = GradeGroup
+        fields = ["id", "name", "weight", "order", "lines"]
+        read_only_fields = ["id"]
+
+
+class GradeSchemeSerializer(serializers.ModelSerializer):
+    lines = GradeLineConfigSerializer(many=True, required=False)
+    groups = GradeGroupConfigSerializer(many=True, required=False)
+    method_label = serializers.CharField(source="get_calculation_method_display", read_only=True)
+
+    class Meta:
+        model = GradeScheme
+        fields = ["id", "session", "calculation_method", "method_label", "lines", "groups", "created_at", "updated_at"]
+        read_only_fields = ["id", "session", "created_at", "updated_at"]
+
+    def validate(self, attrs):
+        method = attrs.get("calculation_method", getattr(self.instance, "calculation_method", GradeScheme.CalculationMethod.EQUAL))
+        lines = attrs.get("lines", [])
+        groups = attrs.get("groups", [])
+        all_lines = lines + [line for group in groups for line in group.get("lines", [])]
+        if not all_lines:
+            raise serializers.ValidationError({"lines": "Ajoutez au moins une ligne de note."})
+        names = [line["name"].strip().casefold() for line in all_lines]
+        if len(names) != len(set(names)):
+            raise serializers.ValidationError({"lines": "Chaque ligne de note doit avoir un nom différent."})
+        if method == GradeScheme.CalculationMethod.WEIGHTED:
+            if groups:
+                raise serializers.ValidationError({"groups": "Le mode par pourcentage n’utilise pas de groupes."})
+            total = sum(line.get("weight") or 0 for line in lines)
+            if total != 100:
+                raise serializers.ValidationError({"lines": "Le total des pourcentages doit être exactement de 100 %."})
+        elif method == GradeScheme.CalculationMethod.GROUPS:
+            if lines or len(groups) < 2 or any(not group.get("lines") for group in groups):
+                raise serializers.ValidationError({"groups": "Créez au moins deux groupes contenant chacun une ligne de note."})
+            if sum(group.get("weight") or 0 for group in groups) != 100:
+                raise serializers.ValidationError({"groups": "Le total des pourcentages des groupes doit être exactement de 100 %."})
+            invalid_groups = [
+                group["name"] for group in groups
+                if sum(line.get("weight") or 0 for line in group.get("lines", [])) != 100
+            ]
+            if invalid_groups:
+                raise serializers.ValidationError({
+                    "groups": f"Le total des lignes doit être de 100 % dans chaque groupe : {', '.join(invalid_groups)}."
+                })
+        elif groups:
+            raise serializers.ValidationError({"groups": "Le mode moyenne simple n’utilise pas de groupes."})
         return attrs
 
     @staticmethod
-    def build_automatic_periods(academic_year):
-        count = 3 if academic_year.division_system == AcademicYear.DivisionSystem.TRIMESTER else 2
-        label = "trimestre" if count == 3 else "semestre"
-        total_days = (academic_year.end_date - academic_year.start_date).days + 1
-        periods = []
-        for index in range(count):
-            start = academic_year.start_date + timedelta(days=(total_days * index) // count)
-            next_start = academic_year.start_date + timedelta(days=(total_days * (index + 1)) // count)
-            periods.append({
-                "name": f"{index + 1}{'er' if index == 0 else 'e'} {label}",
-                "start_date": start,
-                "end_date": academic_year.end_date if index == count - 1 else next_start - timedelta(days=1),
-            })
-        return periods
+    def save_structure(scheme, lines, groups):
+        for index, line in enumerate(lines, start=1):
+            GradeLine.objects.create(scheme=scheme, order=index, name=" ".join(line["name"].split()), weight=line.get("weight"), max_score=line.get("max_score", 20))
+        line_order = 1
+        for group_index, group_data in enumerate(groups, start=1):
+            group_lines = group_data.pop("lines")
+            group = GradeGroup.objects.create(
+                scheme=scheme, name=" ".join(group_data["name"].split()),
+                weight=group_data.get("weight"), order=group_index,
+            )
+            for line in group_lines:
+                GradeLine.objects.create(scheme=scheme, group=group, order=line_order, name=" ".join(line["name"].split()), weight=line.get("weight"), max_score=line.get("max_score", 20))
+                line_order += 1
 
     def create(self, validated_data):
-        periods = validated_data.pop("periods", None)
-        academic_year = AcademicYear.objects.create(**validated_data)
-        periods = periods or self.build_automatic_periods(academic_year)
-        periods = sorted(periods, key=lambda period: period["start_date"])
-        AcademicPeriod.objects.bulk_create([
-            AcademicPeriod(academic_year=academic_year, number=index, is_active=index == 1 and academic_year.is_active, **period)
-            for index, period in enumerate(periods, start=1)
-        ])
-        return academic_year
+        lines = validated_data.pop("lines", [])
+        groups = validated_data.pop("groups", [])
+        with transaction.atomic():
+            scheme = GradeScheme.objects.create(**validated_data)
+            self.save_structure(scheme, lines, groups)
+        return scheme
 
     def update(self, instance, validated_data):
-        periods = validated_data.pop("periods", None)
-        for field, value in validated_data.items():
-            setattr(instance, field, value)
-        instance.save()
-        if periods is not None:
-            periods = sorted(periods, key=lambda period: period["start_date"])
-            instance.periods.all().delete()
-            AcademicPeriod.objects.bulk_create([
-                AcademicPeriod(academic_year=instance, number=index, is_active=index == 1 and instance.is_active, **period)
-                for index, period in enumerate(periods, start=1)
-            ])
+        if instance.lines.filter(entries__isnull=False).exists():
+            raise serializers.ValidationError("La configuration ne peut plus être modifiée après la saisie de notes.")
+        lines = validated_data.pop("lines", [])
+        groups = validated_data.pop("groups", [])
+        with transaction.atomic():
+            instance.calculation_method = validated_data.get("calculation_method", instance.calculation_method)
+            instance.save(update_fields=["calculation_method", "updated_at"])
+            instance.lines.all().delete()
+            instance.groups.all().delete()
+            self.save_structure(instance, lines, groups)
         return instance
 
 
@@ -354,15 +612,21 @@ class StudentEnrollmentSerializer(serializers.ModelSerializer):
     first_names = serializers.CharField(write_only=True)
     gender = serializers.ChoiceField(write_only=True, choices=CustomUser.Gender.choices)
     date_of_birth = serializers.DateField(write_only=True)
-    address = serializers.CharField(write_only=True, required=False, allow_blank=True)
+    health_information = serializers.CharField(write_only=True, required=False, allow_blank=True)
     student_name = serializers.CharField(source="student.get_full_name", read_only=True)
     student_last_name = serializers.CharField(source="student.last_name", read_only=True)
     student_first_names = serializers.CharField(source="student.first_name", read_only=True)
     student_gender = serializers.CharField(source="student.gender", read_only=True)
     student_username = serializers.CharField(source="student.username", read_only=True)
+    student_email = serializers.EmailField(source="student.email", read_only=True)
+    student_phone = serializers.CharField(source="student.phone", read_only=True)
     student_address = serializers.CharField(source="student.address", read_only=True)
+    student_health_information = serializers.CharField(source="student.health_information", read_only=True)
     gender_label = serializers.CharField(source="student.get_gender_display", read_only=True)
     date_of_birth_display = serializers.DateField(source="student.date_of_birth", read_only=True)
+    student_year_result = serializers.CharField(source="student.year_result", read_only=True)
+    student_year_result_label = serializers.CharField(source="student.get_year_result_display", read_only=True)
+    student_date_joined = serializers.DateTimeField(source="student.date_joined", read_only=True)
     level = serializers.PrimaryKeyRelatedField(queryset=SchoolLevel.objects.filter(is_active=True))
     level_name = serializers.CharField(source="level.name", read_only=True)
     level_stage = serializers.CharField(source="level.get_stage_display", read_only=True)
@@ -371,13 +635,31 @@ class StudentEnrollmentSerializer(serializers.ModelSerializer):
     school_class_series = serializers.CharField(source="school_class.series", read_only=True)
     academic_year_name = serializers.CharField(source="academic_year.name", read_only=True)
     history = serializers.SerializerMethodField()
+    student_status = serializers.ChoiceField(choices=CustomUser.StudentStatus.choices, required=False, default=CustomUser.StudentStatus.NEW)
+    student_status_label = serializers.CharField(source="student.get_student_status_display", read_only=True)
+    previous_average = serializers.DecimalField(
+        max_digits=5, decimal_places=2, required=False, allow_null=True,
+        min_value=0, max_value=20,
+    )
+    guardian_phone = serializers.CharField(write_only=True, required=False)
+    guardian_last_name = serializers.CharField(write_only=True, required=False, allow_blank=True)
+    guardian_first_names = serializers.CharField(write_only=True, required=False, allow_blank=True)
+    guardian_profession = serializers.CharField(write_only=True, required=False, allow_blank=True)
+    guardian_id = serializers.IntegerField(source="guardian.id", read_only=True)
+    guardian_name = serializers.CharField(source="guardian.get_full_name", read_only=True)
+    guardian_phone_display = serializers.CharField(source="guardian.phone", read_only=True)
+    guardian_profession_display = serializers.CharField(source="guardian.profession", read_only=True)
 
     class Meta:
         model = StudentEnrollment
         fields = [
             "id", "enrollment_number", "student", "student_name", "student_last_name", "student_first_names", "student_gender",
-            "student_username", "student_address", "gender_label", "date_of_birth_display", "status", "enrolled_at",
-            "level", "level_name", "level_stage", "school_class", "school_class_name", "school_class_series", "academic_year_name", "history", "last_name", "first_names", "gender", "date_of_birth", "address",
+            "student_username", "student_email", "student_phone", "student_address", "student_health_information", "gender_label", "date_of_birth_display",
+            "student_year_result", "student_year_result_label", "student_date_joined", "status", "enrolled_at",
+            "level", "level_name", "level_stage", "series", "previous_average", "student_status", "student_status_label", "school_class", "school_class_name", "school_class_series", "academic_year_name", "history",
+            "guardian_id", "guardian_name", "guardian_phone_display", "guardian_profession_display",
+            "guardian_phone", "guardian_last_name", "guardian_first_names", "guardian_profession",
+            "last_name", "first_names", "gender", "date_of_birth", "health_information",
         ]
         read_only_fields = ["id", "student", "status", "enrolled_at"]
 
@@ -391,6 +673,11 @@ class StudentEnrollmentSerializer(serializers.ModelSerializer):
             queryset = queryset.exclude(pk=self.instance.pk)
         if queryset.exists():
             raise serializers.ValidationError("Ce numéro matricule existe déjà dans cette école.")
+        users = CustomUser.objects.filter(username__iexact=number)
+        if self.instance:
+            users = users.exclude(pk=self.instance.student_id)
+        if users.exists():
+            raise serializers.ValidationError("Ce matricule est déjà utilisé comme nom d’utilisateur.")
         return number
 
     def validate(self, attrs):
@@ -399,12 +686,44 @@ class StudentEnrollmentSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({
                 "academic_year": "Les inscriptions sont interdites pour une année inactive ou clôturée."
             })
+        guardian_phone = attrs.get("guardian_phone")
+        if guardian_phone:
+            guardian_phone = normalize_togolese_phone(guardian_phone)
+            attrs["guardian_phone"] = guardian_phone
+            guardian = CustomUser.objects.filter(role=CustomUser.Role.PARENT, phone=guardian_phone).first()
+            if guardian is None:
+                if CustomUser.objects.filter(username__iexact=guardian_phone).exists():
+                    raise serializers.ValidationError({"guardian_phone": "Ce numéro est déjà utilisé par un autre compte."})
+                if not attrs.get("guardian_last_name", "").strip():
+                    raise serializers.ValidationError({"guardian_last_name": "Le nom du tuteur est obligatoire."})
+                if not attrs.get("guardian_first_names", "").strip():
+                    raise serializers.ValidationError({"guardian_first_names": "Le prénom du tuteur est obligatoire."})
+        elif not self.instance:
+            raise serializers.ValidationError({"guardian_phone": "Le numéro de téléphone du tuteur est obligatoire."})
         school_class = attrs.get("school_class", getattr(self.instance, "school_class", None))
         level = attrs.get("level", getattr(self.instance, "level", None))
+        series = attrs.get("series", getattr(self.instance, "series", "")).strip()
+        allowed_series = {
+            "Seconde": {"CD", "A4", "G1", "G2", "G3", "F1", "F2", "F3", "F4", "E", "TI"},
+            "Première": {"D", "A4", "C4", "G1", "G2", "G3", "F1", "F2", "F3", "F4", "E", "TI"},
+            "Terminale": {"D", "A4", "C4", "G1", "G2", "G3", "F1", "F2", "F3", "F4", "E", "TI"},
+        }
+        normalized_series = series.upper()
+        if level and level.stage != SchoolLevel.Stage.HIGH and series:
+            raise serializers.ValidationError({"series": "Le Primaire et le Collège n’ont pas de série."})
+        if level and level.stage == SchoolLevel.Stage.HIGH:
+            if not series:
+                raise serializers.ValidationError({"series": "La série est obligatoire au Lycée."})
+            if normalized_series not in allowed_series.get(level.name, set()):
+                raise serializers.ValidationError({"series": f"Série invalide pour {level.name}."})
+            attrs["series"] = "Ti" if normalized_series == "TI" else normalized_series
+        else:
+            attrs["series"] = ""
         if school_class and (
             school_class.school_id != self.context["school"].id
             or school_class.academic_year_id != academic_year.id
             or school_class.level_id != level.id
+            or school_class.series.casefold() != attrs["series"].casefold()
         ):
             raise serializers.ValidationError({"school_class": "Cette classe ne correspond pas au niveau sélectionné."})
         return attrs
@@ -417,8 +736,10 @@ class StudentEnrollmentSerializer(serializers.ModelSerializer):
             school=enrollment.school, student=enrollment.student,
         ).select_related("academic_year", "level", "school_class").order_by("-academic_year__start_date")
         return [{
-            "id": item.id, "academic_year": item.academic_year.name, "level": item.level.name if item.level else None,
-            "school_class": item.school_class.name if item.school_class else None,
+            "id": item.id, "academic_year": item.academic_year.name,
+            "cycle": item.level.get_stage_display() if item.level else None,
+            "level": item.level.name if item.level else None,
+            "series": item.series or None, "school_class": item.school_class.name if item.school_class else None,
             "status": item.get_status_display(), "enrolled_at": item.enrolled_at,
         } for item in history]
 
@@ -432,24 +753,45 @@ class StudentEnrollmentSerializer(serializers.ModelSerializer):
         academic_year = self.context["academic_year"]
         level = validated_data.pop("level")
         school_class = validated_data.pop("school_class", None)
+        series = validated_data.pop("series", "")
+        student_status = validated_data.pop("student_status", CustomUser.StudentStatus.NEW)
+        guardian_phone = validated_data.pop("guardian_phone")
+        guardian_last_name = " ".join(validated_data.pop("guardian_last_name", "").split())
+        guardian_first_names = " ".join(validated_data.pop("guardian_first_names", "").split())
+        guardian_profession = " ".join(validated_data.pop("guardian_profession", "").split())
         enrollment_number = validated_data.pop("enrollment_number")
-        username_base = slugify(f"{school.code}-{enrollment_number}").replace("-", "")
-        username = username_base
-        suffix = 1
-        while CustomUser.objects.filter(username__iexact=username).exists():
-            suffix += 1
-            username = f"{username_base}{suffix}"
+        username = enrollment_number
         with transaction.atomic():
+            guardian = CustomUser.objects.filter(
+                role=CustomUser.Role.PARENT, phone=guardian_phone,
+            ).first()
+            if guardian is None:
+                guardian = CustomUser(
+                    username=guardian_phone,
+                    phone=guardian_phone,
+                    last_name=guardian_last_name,
+                    first_name=guardian_first_names,
+                    profession=guardian_profession,
+                    role=CustomUser.Role.PARENT,
+                )
+                guardian.set_password(guardian_last_name)
+                guardian.save()
+            SchoolMembership.objects.update_or_create(
+                school=school, user=guardian,
+                defaults={"role": CustomUser.Role.PARENT, "is_active": True},
+            )
             student = CustomUser(
                 username=username,
+                enrollment_number=enrollment_number,
+                student_status=student_status,
                 last_name=" ".join(validated_data.pop("last_name").split()),
                 first_name=" ".join(validated_data.pop("first_names").split()),
                 gender=validated_data.pop("gender"),
                 date_of_birth=validated_data.pop("date_of_birth"),
-                address=validated_data.pop("address", "").strip(),
+                health_information=validated_data.pop("health_information", "").strip(),
                 role=CustomUser.Role.STUDENT,
             )
-            student.set_password(f"{student.username}@")
+            student.set_password(enrollment_number)
             student.save()
             SchoolMembership.objects.create(
                 school=school, user=student, role=CustomUser.Role.STUDENT
@@ -458,23 +800,53 @@ class StudentEnrollmentSerializer(serializers.ModelSerializer):
                 school=school,
                 academic_year=academic_year,
                 student=student,
+                guardian=guardian,
                 level=level,
                 school_class=school_class,
+                series=series,
+                previous_average=validated_data.pop("previous_average", None),
                 enrollment_number=enrollment_number,
             )
             return enrollment
 
     def update(self, instance, validated_data):
+        guardian_phone = validated_data.pop("guardian_phone", None)
+        guardian_last_name = " ".join(validated_data.pop("guardian_last_name", "").split())
+        guardian_first_names = " ".join(validated_data.pop("guardian_first_names", "").split())
+        guardian_profession = " ".join(validated_data.pop("guardian_profession", "").split())
+        if guardian_phone:
+            guardian = CustomUser.objects.filter(role=CustomUser.Role.PARENT, phone=guardian_phone).first()
+            if guardian is None:
+                guardian = CustomUser(
+                    username=guardian_phone, phone=guardian_phone,
+                    last_name=guardian_last_name, first_name=guardian_first_names,
+                    profession=guardian_profession, role=CustomUser.Role.PARENT,
+                )
+                guardian.set_password(guardian_last_name)
+                guardian.save()
+            SchoolMembership.objects.update_or_create(
+                school=instance.school, user=guardian,
+                defaults={"role": CustomUser.Role.PARENT, "is_active": True},
+            )
+            instance.guardian = guardian
         student = instance.student
-        field_mapping = {"last_name": "last_name", "first_names": "first_name", "gender": "gender", "date_of_birth": "date_of_birth", "address": "address"}
+        if "student_status" in validated_data:
+            student.student_status = validated_data.pop("student_status")
+        field_mapping = {"last_name": "last_name", "first_names": "first_name", "gender": "gender", "date_of_birth": "date_of_birth", "health_information": "health_information"}
         for input_name, model_name in field_mapping.items():
             if input_name in validated_data:
                 value = validated_data.pop(input_name)
                 setattr(student, model_name, " ".join(value.split()) if isinstance(value, str) else value)
         student.save()
-        for field in ("enrollment_number", "level", "school_class"):
+        for field in ("enrollment_number", "level", "series", "school_class", "previous_average"):
             if field in validated_data:
                 setattr(instance, field, validated_data[field])
+        if "enrollment_number" in validated_data:
+            new_number = validated_data["enrollment_number"]
+            student.enrollment_number = new_number
+            student.username = new_number
+            student.set_password(new_number)
+            student.save(update_fields=["enrollment_number", "username", "password"])
         instance.save()
         return instance
 
@@ -507,7 +879,7 @@ class SchoolClassSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = SchoolClass
-        fields = ["id", "name", "school", "academic_year", "level", "level_name", "cycle", "cycle_label", "series", "group", "homeroom_teacher", "homeroom_teacher_name", "subjects", "effectif", "is_active", "created_at"]
+        fields = ["id", "name", "school", "academic_year", "level", "level_name", "cycle", "cycle_label", "series", "group", "maximum_capacity", "homeroom_teacher", "homeroom_teacher_name", "subjects", "effectif", "is_active", "created_at"]
         read_only_fields = ["id", "name", "school", "academic_year", "level_name", "cycle", "cycle_label", "homeroom_teacher_name", "created_at"]
 
     def validate_level(self, level):
@@ -524,6 +896,11 @@ class SchoolClassSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Le groupe est obligatoire.")
         return group
 
+    def validate_maximum_capacity(self, value):
+        if value < 1:
+            raise serializers.ValidationError("La capacité maximale doit être supérieure à zéro.")
+        return value
+
     def validate(self, attrs):
         level = attrs.get("level", getattr(self.instance, "level", None))
         series = attrs.get("series", getattr(self.instance, "series", ""))
@@ -531,9 +908,9 @@ class SchoolClassSerializer(serializers.ModelSerializer):
         teacher = attrs.get("homeroom_teacher", getattr(self.instance, "homeroom_teacher", None))
         subject_configs = attrs.get("subject_configurations")
         allowed_series = {
-            "Seconde": {"CD", "A4"},
-            "Première": {"D", "A4", "C4"},
-            "Terminale": {"D", "A4", "C4"},
+            "Seconde": {"CD", "A4", "G1", "G2", "G3", "F1", "F2", "F3", "F4", "E", "TI"},
+            "Première": {"D", "A4", "C4", "G1", "G2", "G3", "F1", "F2", "F3", "F4", "E", "TI"},
+            "Terminale": {"D", "A4", "C4", "G1", "G2", "G3", "F1", "F2", "F3", "F4", "E", "TI"},
         }
         if level and level.stage != SchoolLevel.Stage.HIGH and series:
             raise serializers.ValidationError({"series": "Le Primaire et le Collège n’ont pas de série."})

@@ -124,6 +124,7 @@
 /* ── Main area ── */
 .main {
   flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -195,6 +196,7 @@
 .content {
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
   padding: 48px 64px;
 }
 
@@ -518,6 +520,11 @@
   color: #1d4ed8;
   background: #eff6ff;
 }
+
+.teacher-subjects-group { margin-top: 6px; }
+.teacher-subject-options { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.teacher-subject-option { display: flex; align-items: center; gap: 7px; padding: 9px 11px; border: 1px solid #dbe3ef; border-radius: 9px; color: #334155; background: #f8fafc; cursor: pointer; }
+.teacher-subject-option.selected { border-color: #60a5fa; color: #1d4ed8; background: #eff6ff; }
 
 .form-input[aria-invalid="true"] {
   border-color: #dc2626;
@@ -995,26 +1002,40 @@
 .academic-year-heading span { color: #64748b; font-size: 12px; }
 .academic-year-heading strong { padding: 5px 8px; border-radius: 999px; color: #166534; background: #dcfce7; font-size: 10px; }
 .academic-year-card > p { color: #475569; font-size: 13px; }
-.academic-periods { display: flex; flex-direction: column; gap: 8px; margin: 16px 0; }
-.academic-periods div { display: flex; justify-content: space-between; gap: 10px; padding: 9px 10px; border-radius: 8px; background: #f8fafc; }
-.academic-periods div.active { border: 1px solid #86efac; background: #f0fdf4; }
-.academic-periods div > span { display: flex; flex-direction: column; gap: 3px; }
-.academic-periods em { align-self: center; color: #94a3b8; font-size: 10px; font-style: normal; font-weight: 700; }
-.period-close-btn, .year-close-btn { padding: 6px 9px; border: 1px solid #fdba74; border-radius: 7px; color: #c2410c; background: #fff7ed; font-size: 11px; font-weight: 700; cursor: pointer; }
-.academic-periods b { color: #334155; font-size: 12px; text-transform: capitalize; }
-.academic-periods small { color: #64748b; font-size: 10px; }
+.academic-session-list { display:flex; flex-direction:column; gap:7px; margin:12px 0; }
+.academic-session-item { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:9px 10px; border:1px solid #e2e8f0; border-radius:9px; background:#f8fafc; }
+.academic-session-item.active { border-color:#86efac; background:#f0fdf4; }
+.academic-session-item.closed { opacity:.72; background:#f1f5f9; }
+.academic-session-item > div:first-child { display:flex; flex-direction:column; gap:3px; }
+.academic-session-item b { color:#334155; font-size:12px; }
+.academic-session-item .session-label { display:inline-flex; margin-left:7px; padding:2px 6px; border-radius:999px; color:#1d4ed8; background:#dbeafe; font-size:9px; }
+.academic-session-item small { color:#64748b; font-size:10px; }
+.academic-session-item small.session-classes { color:#1d4ed8; font-weight:700; }
+.academic-session-actions { display:flex; align-items:center; gap:5px; }
+.academic-session-actions button { padding:4px 7px; border:1px solid #bfdbfe; color:#1d4ed8; background:#fff; font-size:10px; }
+.academic-session-actions button.close-session { color:#c2410c; border-color:#fdba74; background:#fff7ed; }
+.academic-session-actions em { color:#15803d; font-size:10px; font-weight:800; font-style:normal; }
+.academic-session-actions em.closed { color:#64748b; }
+.year-close-btn { padding: 6px 9px; border: 1px solid #fdba74; border-radius: 7px; color: #c2410c; background: #fff7ed; font-size: 11px; font-weight: 700; cursor: pointer; }
 .academic-year-actions { display: flex; gap: 8px; }
 .academic-year-form { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .academic-year-form h2, .academic-year-form .btn-primary, .academic-active-check { grid-column: 1 / -1; }
+.academic-session-auto-active { grid-column:1 / -1; padding:9px; border-radius:8px; color:#166534; background:#f0fdf4; }
+.academic-session-form { width:min(760px,92vw); }
+.academic-session-class-picker { grid-column:1 / -1; display:flex; flex-direction:column; gap:8px; }
+.academic-session-class-picker > small { color:#64748b; }
+.academic-session-class-picker > div { display:grid; grid-template-columns:repeat(auto-fill,minmax(180px,1fr)); gap:8px; max-height:260px; overflow:auto; }
+.academic-session-class-picker button { display:flex; align-items:center; gap:8px; padding:9px; border:1px solid #dbe3ef; border-radius:8px; color:#334155; background:#fff; text-align:left; }
+.academic-session-class-picker button.selected { border-color:#3b82f6; color:#1d4ed8; background:#eff6ff; }
+.academic-session-class-picker button.unavailable { opacity:.55; color:#64748b; background:#f1f5f9; cursor:not-allowed; }
+.academic-session-class-picker button > span:last-child { display:flex; flex:1; flex-direction:column; gap:2px; min-width:0; line-height:1.25; }
+.academic-session-class-picker button small { color:#c2410c; font-size:9px; }
+.academic-session-class-picker button > span:first-child { display:flex; flex:0 0 18px; align-items:center; justify-content:center; width:18px; height:18px; border:1px solid #cbd5e1; border-radius:4px; }
+.academic-session-class-picker button.selected > span:first-child { color:#fff; border-color:#2563eb; background:#2563eb; }
+.academic-session-class-picker em { color:#1d4ed8; font-size:12px; font-style:normal; font-weight:800; }
 .academic-year-form label { display: flex; flex-direction: column; gap: 7px; color: #475569; font-size: 13px; font-weight: 600; }
 .academic-year-form .academic-active-check { flex-direction: row; align-items: center; }
-.manual-periods { grid-column: 1 / -1; }
-.manual-periods h3 { margin: 4px 0 12px; color: #334155; font-size: 15px; }
-.period-help { margin: -5px 0 13px; color: #64748b; font-size: 12px; }
-.manual-period { display: grid; grid-template-columns: 1.2fr 1fr 1fr; gap: 12px; margin: 0 0 12px; padding: 14px; border: 1px solid #e2e8f0; border-radius: 10px; }
-.manual-period legend { padding: 0 6px; color: #1d4ed8; font-size: 12px; font-weight: 700; text-transform: capitalize; }
 @media (max-width: 650px) { .academic-year-form { grid-template-columns: 1fr; } }
-@media (max-width: 650px) { .manual-period { grid-template-columns: 1fr; } }
 
 .dashboard-academic-banner {
   display: flex;
@@ -1035,6 +1056,14 @@
 .page-context { margin: 5px 0 0; color: #64748b; font-size: 13px; }
 .enrollment-form { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .enrollment-form h2, .enrollment-form .btn-primary, .enrollment-address { grid-column: 1 / -1; }
+.guardian-fields { grid-column: 1 / -1; display: grid; gap: 14px; padding: 16px; border: 1px solid #cbd5e1; border-radius: 10px; }
+.guardian-fields legend { padding: 0 7px; color: #1e3a8a; font-weight: 700; }
+.guardian-phone-row { display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: end; }
+.guardian-phone-row label { display: flex; flex-direction: column; gap: 7px; }
+.guardian-found { display: flex; flex-wrap: wrap; gap: 8px 16px; padding: 12px; border-radius: 8px; color: #166534; background: #f0fdf4; }
+.guardian-manual-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.guardian-manual-fields p { grid-column: 1 / -1; margin: 0; }
+@media (max-width: 700px) { .guardian-phone-row, .guardian-manual-fields { grid-template-columns: 1fr; } }
 .enrollment-form-error { grid-column: 1 / -1; margin-bottom: 0; }
 .enrollment-form label { display: flex; flex-direction: column; gap: 7px; color: #475569; font-size: 13px; font-weight: 600; }
 .enrollment-address textarea { min-height: 80px; resize: vertical; }
@@ -1067,12 +1096,58 @@
 .assignment-subject.disabled { color: #b91c1c; }
 .class-size-ok { color: #15803d; }
 .class-size-over { color: #dc2626; }
-.classes-page { max-width: 1400px; width: calc(100% + 48px); margin-left: -24px; }
+.class-row-inactive { background: #f8fafc; color: #94a3b8; }
+.class-status-toggle { display: inline-flex; align-items: center; gap: 8px; padding: 3px; border: 0; cursor: pointer; white-space: nowrap; background: transparent; font: inherit; }
+.class-status-track { position: relative; width: 38px; height: 22px; border-radius: 999px; background: #cbd5e1; transition: background-color .2s ease; }
+.class-status-thumb { position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(15, 23, 42, .25); transition: transform .2s ease; }
+.class-status-toggle.is-active .class-status-track { background: #22c55e; }
+.class-status-toggle.is-active .class-status-thumb { transform: translateX(16px); }
+.class-status-toggle:focus-visible { border-radius: 8px; outline: 3px solid rgba(37, 99, 235, .25); outline-offset: 2px; }
+.class-status-toggle:disabled { opacity: .55; cursor: wait; }
+.class-status-active { color: #15803d; font-weight: 600; }
+.class-status-inactive { color: #64748b; font-weight: 600; }
+.classes-page { max-width: 1400px; width: 100%; min-width: 0; margin-left: auto; margin-right: auto; }
 .class-name-cell { min-width: 135px; white-space: nowrap; }
-.students-page { max-width: 1400px; }
-.student-filters { display: grid; grid-template-columns: 1.4fr repeat(4, 1fr); gap: 10px; margin-bottom: 18px; }
+.classes-table-wrap { width: 100%; max-width: 100%; overflow-x: auto; overscroll-behavior-inline: contain; scrollbar-gutter: stable; }
+.classes-table { min-width: 1080px; }
+.classes-table th,
+.classes-table td { padding: 13px 12px; }
+.classes-table th:nth-child(1) { min-width: 135px; }
+.classes-table th:nth-child(6) { min-width: 105px; }
+.classes-table th:nth-child(7) { min-width: 130px; }
+.classes-table th:nth-child(9) { min-width: 120px; }
+.classes-table th:last-child { min-width: 205px; }
+.classes-page .actions-cell { min-width: 205px; flex-wrap: wrap; gap: 6px; }
+.classes-page .actions-cell button { min-height: 32px; }
+.classes-page .actions-cell button:disabled { opacity: .45; cursor: not-allowed; }
+.classes-page .class-row-inactive:hover td { background: #f1f5f9; }
+.students-page { max-width: 1400px; width: 100%; margin-left: auto; margin-right: auto; }
+.enrollments-page { max-width: 1400px; }
+.student-filters { display: grid; grid-template-columns: 1.4fr repeat(5, 1fr); gap: 10px; margin-bottom: 18px; }
 .student-profile-card { display: block; padding: 24px; }
-@media (max-width: 900px) { .student-filters { grid-template-columns: 1fr 1fr; } }
+.students-page .teachers-table-wrap { overflow-x: auto; }
+.students-page .teachers-table { min-width: 1220px; }
+.students-page .teachers-table th:last-child,
+.students-page .teachers-table td:last-child { position: sticky; right: 0; z-index: 2; min-width: 230px; background: #fff; box-shadow: -8px 0 12px -12px rgba(15, 23, 42, 0.45); }
+.students-page .teachers-table th:last-child { z-index: 3; }
+.students-page .actions-cell { flex-wrap: nowrap; white-space: nowrap; }
+.students-page .action-btn { width: auto; min-width: 58px; padding: 0 9px; }
+.students-page .teachers-table tbody tr:hover td:last-child { background: #e8f0fe; }
+.student-status-badge { display: inline-flex; align-items: center; border-radius: 999px; padding: 5px 10px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+.student-status-nouveau { color: #166534; background: #dcfce7; }
+.student-status-redoublant { color: #92400e; background: #fef3c7; }
+.student-status-abandon { color: #991b1b; background: #fee2e2; }
+.student-status-bachelier { color: #5b21b6; background: #ede9fe; }
+.assignment-explanation { margin: -8px 0 20px; padding: 14px 16px; border: 1px solid #bfdbfe; border-radius: 10px; color: #1e3a8a; background: #eff6ff; line-height: 1.5; }
+.assignment-result { margin-bottom: 16px; padding: 14px 16px; border: 1px solid #bbf7d0; border-radius: 10px; color: #166534; background: #f0fdf4; }
+.assignment-result p { margin: 7px 0 0; color: #92400e; }
+.assignment-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; margin-bottom: 18px; }
+.assignment-summary-card { display: flex; flex-direction: column; gap: 5px; padding: 14px; border: 1px solid #e2e8f0; border-radius: 10px; background: #fff; }
+.assignment-summary-card span { color: #64748b; font-size: 13px; }
+.assignment-summary-card ul { margin: 5px 0 0; padding-left: 18px; color: #334155; font-size: 13px; }
+.unassigned-table-wrap { overflow-x: auto; }
+.unassigned-table-wrap .teachers-table { min-width: 900px; }
+@media (max-width: 900px) { .students-page { width: 100%; margin-left: 0; } .student-filters { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 900px) { .classes-page { width: 100%; margin-left: 0; } }
 .teacher-full-details { width: min(880px, calc(100vw - 32px)); }
 .teacher-detail-summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }

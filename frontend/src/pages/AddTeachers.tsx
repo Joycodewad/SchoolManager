@@ -18,9 +18,8 @@ const emptyTeacher = (schoolIds: number[] = []) => ({
   email: "",
   phone: "+228",
   gender: "",
-  primarySubject: "",
-  secondarySubject: "",
-  tertiarySubject: "",
+  subjectIds: [] as number[],
+  primarySubjectId: null as number | null,
   schoolIds,
 });
 
@@ -116,9 +115,8 @@ export default function AddTeacher() {
         email: teacher.email ?? "",
         phone: teacher.phone ?? "+228",
         gender: teacher.gender,
-        primarySubject: teacher.primary_subject ? String(teacher.primary_subject) : "",
-        secondarySubject: teacher.secondary_subject ? String(teacher.secondary_subject) : "",
-        tertiarySubject: teacher.tertiary_subject ? String(teacher.tertiary_subject) : "",
+        subjectIds: teacher.subjects ?? [],
+        primarySubjectId: teacher.primary_subject ?? null,
         schoolIds: teacher.assigned_school_ids,
       }]);
     }).catch((requestError) => setError(
@@ -138,6 +136,19 @@ export default function AddTeacher() {
         ? teacher.schoolIds.filter((id) => id !== schoolId)
         : [...teacher.schoolIds, schoolId];
       return { ...teacher, schoolIds };
+    }));
+  };
+
+  const toggleSubject = (teacherIndex: number, subjectId: number) => {
+    setTeachers((current) => current.map((teacher, index) => {
+      if (index !== teacherIndex) return teacher;
+      const subjectIds = teacher.subjectIds.includes(subjectId)
+        ? teacher.subjectIds.filter((id) => id !== subjectId)
+        : [...teacher.subjectIds, subjectId];
+      const primarySubjectId = teacher.primarySubjectId === subjectId && !subjectIds.includes(subjectId)
+        ? (subjectIds[0] ?? null)
+        : (teacher.primarySubjectId ?? subjectIds[0] ?? null);
+      return { ...teacher, subjectIds, primarySubjectId };
     }));
   };
 
@@ -170,9 +181,8 @@ export default function AddTeacher() {
           email: teacher.email.trim(),
           phone: formatPhone(teacher.phone),
           gender: teacher.gender as "M" | "F",
-          primary_subject: teacher.primarySubject ? Number(teacher.primarySubject) : null,
-          secondary_subject: teacher.secondarySubject ? Number(teacher.secondarySubject) : null,
-          tertiary_subject: teacher.tertiarySubject ? Number(teacher.tertiarySubject) : null,
+          subjects: teacher.subjectIds,
+          primary_subject: teacher.primarySubjectId,
           school_ids: teacher.schoolIds,
           role: teacher.role,
         };
@@ -301,51 +311,34 @@ export default function AddTeacher() {
                 </div>
               </div>
 
-              <div className="form-row-2">
-                <div className="form-group">
-                  <label className="form-label">Genre *</label>
-                  <select
-                    className="form-select"
-                    value={t.gender}
-                    onChange={(e) => update(i, "gender", e.target.value)}
-                    required
-                  >
-                    <option value="">Choisir le genre</option>
-                    {GENDERS.map((g) => (
-                      <option key={g.value} value={g.value}>
-                        {g.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div className="form-group">
-                  <label className="form-label">Matière principale (optionnel)</label>
-                  <select className="form-select" value={t.primarySubject} disabled={subjectsLoading} onChange={(e) => update(i, "primarySubject", e.target.value)}>
-                    <option value="">{subjectsLoading ? "Chargement…" : "Aucune"}</option>
-                    {subjects.map((subject) => <option key={subject.id} value={subject.id}
-                      disabled={String(subject.id) === t.secondarySubject || String(subject.id) === t.tertiarySubject}>{subject.name}</option>)}
-                  </select>
-                </div>
+              <div className="form-group">
+                <label className="form-label">Genre *</label>
+                <select className="form-select" value={t.gender} onChange={(e) => update(i, "gender", e.target.value)} required>
+                  <option value="">Choisir le genre</option>
+                  {GENDERS.map((g) => <option key={g.value} value={g.value}>{g.label}</option>)}
+                </select>
               </div>
 
-              <div className="form-row-2">
-                <div className="form-group">
-                  <label className="form-label">Matière secondaire (optionnel)</label>
-                  <select className="form-select" value={t.secondarySubject} disabled={subjectsLoading} onChange={(e) => update(i, "secondarySubject", e.target.value)}>
-                    <option value="">{subjectsLoading ? "Chargement…" : "Aucune"}</option>
-                    {subjects.map((subject) => <option key={subject.id} value={subject.id}
-                      disabled={String(subject.id) === t.primarySubject || String(subject.id) === t.tertiarySubject}>{subject.name}</option>)}
-                  </select>
+              <div className="form-group teacher-subjects-group">
+                <label className="form-label">Matières enseignées ({t.subjectIds.length})</label>
+                <div className="teacher-subject-options">
+                  {subjects.map((subject) => <label className={`teacher-subject-option${t.subjectIds.includes(subject.id) ? " selected" : ""}`} key={subject.id}>
+                    <input type="checkbox" checked={t.subjectIds.includes(subject.id)} onChange={() => toggleSubject(i, subject.id)} />
+                    <span>{subject.name}</span>
+                  </label>)}
                 </div>
-                <div className="form-group">
-                  <label className="form-label">Matière tertiaire (optionnel)</label>
-                  <select className="form-select" value={t.tertiarySubject} disabled={subjectsLoading} onChange={(e) => update(i, "tertiarySubject", e.target.value)}>
-                    <option value="">{subjectsLoading ? "Chargement…" : "Aucune"}</option>
-                    {subjects.map((subject) => <option key={subject.id} value={subject.id}
-                      disabled={String(subject.id) === t.primarySubject || String(subject.id) === t.secondarySubject}>{subject.name}</option>)}
-                  </select>
-                </div>
+                {subjectsLoading && <span className="form-hint">Chargement des matières…</span>}
+                {!subjectsLoading && !subjects.length && <span className="field-error">Aucune matière configurée dans cette école.</span>}
+                <span className="form-hint">Sélectionnez autant de matières que nécessaire.</span>
               </div>
+              {t.subjectIds.length > 0 && <div className="form-group">
+                <label className="form-label">Matière principale *</label>
+                <select className="form-select" value={t.primarySubjectId ?? ""} onChange={(e) => update(i, "primarySubjectId", Number(e.target.value))} required>
+                  <option value="">Choisir la matière principale</option>
+                  {subjects.filter((subject) => t.subjectIds.includes(subject.id)).map((subject) => <option key={subject.id} value={subject.id}>{subject.name}</option>)}
+                </select>
+                <span className="form-hint">Elle doit faire partie des matières sélectionnées ci-dessus.</span>
+              </div>}
             </div>
           ))}
 

@@ -1,39 +1,22 @@
 const API_URL = import.meta.env.VITE_API_URL ?? "/api";
-export interface AcademicPeriod {
-  id: number;
-  number: number;
-  name: string;
-  start_date: string;
-  end_date: string;
-  is_active: boolean;
-  is_closed: boolean;
-}
-
 export interface AcademicYear {
   id: number;
   school: number;
   name: string;
   start_date: string;
   end_date: string;
-  division_system: "trimestre" | "semestre";
-  division_label: string;
   is_active: boolean;
   is_closed: boolean;
-  periods: AcademicPeriod[];
+  sessions: AcademicSession[];
 }
+export interface AcademicSession { id: number; academic_year: number; name: string; label: string; start_date: string; end_date: string; classes: number[]; class_names: string[]; is_active: boolean; is_closed: boolean; created_at: string; }
+export interface AcademicSessionPayload { name: string; label: string; start_date: string; end_date: string; classes: number[]; is_active?: boolean; }
 
 export interface AcademicYearPayload {
   name: string;
   start_date: string;
   end_date: string;
-  division_system: "trimestre" | "semestre";
   is_active: boolean;
-  periods?: Array<{
-    name: string;
-    start_date: string;
-    end_date: string;
-    is_closed?: boolean;
-  }>;
 }
 
 const call = async (schoolId: number | string, path = "", options: RequestInit = {}) => {
@@ -58,5 +41,11 @@ export const deleteAcademicYear = (schoolId: number | string, id: number): Promi
   call(schoolId, `${id}/`, { method: "DELETE" });
 export const closeAcademicYear = (schoolId: number | string, id: number): Promise<AcademicYear> =>
   call(schoolId, `${id}/close/`, { method: "POST" });
-export const closeAcademicPeriod = (schoolId: number | string, yearId: number, periodId: number): Promise<AcademicPeriod> =>
-  call(schoolId, `${yearId}/periods/${periodId}/close/`, { method: "POST" });
+export const createAcademicSession = (schoolId: number | string, yearId: number, payload: AcademicSessionPayload): Promise<AcademicSession> =>
+  call(schoolId, `${yearId}/sessions/`, { method: "POST", body: JSON.stringify(payload) });
+export const updateAcademicSession = (schoolId: number | string, yearId: number, id: number, payload: Partial<AcademicSessionPayload>): Promise<AcademicSession> =>
+  call(schoolId, `${yearId}/sessions/${id}/`, { method: "PATCH", body: JSON.stringify(payload) });
+export const deleteAcademicSession = (schoolId: number | string, yearId: number, id: number): Promise<void> =>
+  call(schoolId, `${yearId}/sessions/${id}/`, { method: "DELETE" });
+export const closeAcademicSession = (schoolId: number | string, yearId: number, id: number): Promise<AcademicSession> =>
+  call(schoolId, `${yearId}/sessions/${id}/close/`, { method: "POST" });

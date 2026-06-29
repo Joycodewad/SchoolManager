@@ -21,6 +21,7 @@ import "./assets/calendar.css";
 import "./assets/notice.css";
 import "./assets/library.css";
 import "./assets/feescollection.css";
+import "./assets/grades.css";
 import DashboardLayout from "./layouts/DashboardLayout";
 import PrivateRoute from "./hooks/PrivateRoute";
 import Schools from "./pages/Schools";
@@ -29,6 +30,10 @@ import AcademicYears from "./pages/AcademicYears";
 import Enrollments from "./pages/Enrollments";
 import Classes from "./pages/Classes";
 import StudentDetail from "./pages/StudentDetail";
+import UnassignedStudents from "./pages/UnassignedStudents";
+import TuitionSettings from "./pages/TuitionSettings";
+import SchoolExpenses from "./pages/SchoolExpenses";
+import Grades from "./pages/Grades";
 function App() {
   return (
     <BrowserRouter>
@@ -47,6 +52,7 @@ function App() {
           <Route path="/schools/:schoolId/teachers/:id/edit" element={<AddTeacher />} />
           <Route path="/schools/:schoolId/teachers/:id" element={<TeacherDetail />} />
           <Route path="/schools/:schoolId/students" element={<Students />} />
+          <Route path="/schools/:schoolId/students/unassigned" element={<UnassignedStudents />} />
           <Route path="/schools/:schoolId/students/:id" element={<StudentDetail />} />
           <Route path="/schools/:schoolId/attendance" element={<Attendance />} />
           <Route path="/schools/:schoolId/message" element={<Message />} />
@@ -54,6 +60,9 @@ function App() {
           <Route path="/schools/:schoolId/notice" element={<Notice />} />
           <Route path="/schools/:schoolId/library" element={<Library/>} />
           <Route path="/schools/:schoolId/finance/fees" element={<FeesCollection/>} />
+          <Route path="/schools/:schoolId/finance/tuition-settings" element={<TuitionSettings/>} />
+          <Route path="/schools/:schoolId/finance/expenses" element={<SchoolExpenses/>} />
+          <Route path="/schools/:schoolId/grades" element={<Grades/>} />
           {/* 
           <Route
             path="/finance/expenses"

@@ -17,8 +17,6 @@ export default function Login() {
     const errs: Record<string, string> = {};
     if (!formData.username.trim()) errs.username = "Le nom d’utilisateur est requis.";
     if (!formData.password) errs.password = "Le mot de passe est requis.";
-    else if (formData.password.length < 6)
-      errs.password = "Minimum 6 caractères.";
     return errs;
   };
 

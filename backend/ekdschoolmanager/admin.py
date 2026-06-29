@@ -1,7 +1,7 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
 
-from .models import AcademicPeriod, AcademicYear, CustomUser, School, SchoolLevel, SchoolMembership, StudentEnrollment, Subject
+from .models import AcademicYear, CustomUser, School, SchoolLevel, SchoolMembership, StudentEnrollment, Subject
 
 
 @admin.register(CustomUser)
@@ -14,7 +14,7 @@ class CustomUserAdmin(UserAdmin):
     fieldsets = (
         (None, {"fields": ("username", "password")}),
         ("Identité", {"fields": ("last_name", "first_name", "email", "phone", "gender")}),
-        ("Établissement", {"fields": ("role", "primary_subject", "secondary_subject", "tertiary_subject", "is_archived")}),
+        ("Établissement", {"fields": ("role", "subjects", "primary_subject", "is_archived")}),
         ("Permissions", {"fields": ("is_active", "is_staff", "is_superuser", "groups", "user_permissions")}),
         ("Dates", {"fields": ("last_login", "date_joined")}),
     )
@@ -39,16 +39,10 @@ class SubjectAdmin(admin.ModelAdmin):
     search_fields = ("name", "code")
 
 
-class AcademicPeriodInline(admin.TabularInline):
-    model = AcademicPeriod
-    extra = 0
-
-
 @admin.register(AcademicYear)
 class AcademicYearAdmin(admin.ModelAdmin):
-    list_display = ("name", "school", "division_system", "start_date", "end_date", "is_active", "is_closed")
-    list_filter = ("school", "division_system", "is_active", "is_closed")
-    inlines = [AcademicPeriodInline]
+    list_display = ("name", "school", "start_date", "end_date", "is_active", "is_closed")
+    list_filter = ("school", "is_active", "is_closed")
 
 
 @admin.register(StudentEnrollment)

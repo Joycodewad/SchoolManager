@@ -108,7 +108,7 @@ export default function Dashboard() {
 
       <div className="dashboard-academic-banner">
         <div><span>Année académique en cours</span><strong>{currentAcademicYear?.name ?? "Aucune année active"}</strong></div>
-        {currentAcademicYear && <small>{currentAcademicYear.start_date} → {currentAcademicYear.end_date} · {currentAcademicYear.division_label}</small>}
+        {currentAcademicYear && <small>{currentAcademicYear.start_date} → {currentAcademicYear.end_date}</small>}
       </div>
 
       {/* ── Stat cards ── */}

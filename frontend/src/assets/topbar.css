@@ -71,6 +71,9 @@
 
 .topbar-academic-year span { color: #64748b; font-size: 9px; font-weight: 700; text-transform: uppercase; }
 .topbar-academic-year strong { margin-top: 3px; color: #1d4ed8; font-size: 12px; }
+.topbar-academic-session { display:flex; flex-direction:column; padding:6px 11px; border:1px solid #bbf7d0; border-radius:9px; background:#f0fdf4; line-height:1.15; }
+.topbar-academic-session span { color:#64748b; font-size:9px; font-weight:700; text-transform:uppercase; }
+.topbar-academic-session strong { margin-top:3px; color:#15803d; font-size:12px; }
 
 /* ── Icon buttons ── */
 .topbar-icon-btn {

@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
-import { createClass, deleteClass, listClasses, SchoolClass, updateClass } from "../api/classes";
+import { createClass, listClasses, SchoolClass, updateClass } from "../api/classes";
 import { listSchoolLevels, SchoolLevel } from "../api/enrollments";
 import { useAuth } from "../hooks/AuthContext";
 import { listSubjects, Subject } from "../api/subjects";
@@ -26,13 +26,14 @@ export default function Classes() {
   const [subjectConfigs, setSubjectConfigs] = useState<Record<number, SubjectFormConfig>>({});
   const [teacherClass, setTeacherClass] = useState<SchoolClass | null>(null);
   const [subjectsClass, setSubjectsClass] = useState<SchoolClass | null>(null);
+  const [togglingClassId, setTogglingClassId] = useState<number | null>(null);
   const selectedLevelData = levels.find((level) => level.id === selectedLevel);
-  const availableSeries = selectedLevelData?.name === "Seconde" ? ["CD", "A4"]
-    : selectedLevelData?.name === "Première" || selectedLevelData?.name === "Terminale" ? ["D", "A4", "C4"] : [];
+  const availableSeries = selectedLevelData?.name === "Seconde" ? ["CD", "A4", "G1", "G2", "G3", "F1", "F2", "F3", "F4", "E", "Ti"]
+    : selectedLevelData?.name === "Première" || selectedLevelData?.name === "Terminale" ? ["D", "A4", "C4", "G1", "G2", "G3", "F1", "F2", "F3", "F4", "E", "Ti"] : [];
 
   const load = async () => {
     if (!activeAcademicYear) { setClasses([]); return; }
-    try { setClasses(await listClasses(schoolId)); } catch (reason) { setError(reason instanceof Error ? reason.message : "Chargement impossible."); }
+    try { setClasses(await listClasses(schoolId, true)); } catch (reason) { setError(reason instanceof Error ? reason.message : "Chargement impossible."); }
   };
   useEffect(() => {
     setError(""); void load();
@@ -46,6 +47,7 @@ export default function Classes() {
     const form = new FormData(event.currentTarget);
     const payload = {
       level: Number(form.get("level")), series: String(form.get("series") ?? "").trim(), group: String(form.get("group") ?? "").trim(),
+      maximum_capacity: Number(form.get("maximum_capacity")),
     };
     try {
       if (editing) await updateClass(schoolId, editing.id, payload); else await createClass(schoolId, payload);
@@ -53,10 +55,15 @@ export default function Classes() {
       setShowForm(false); setEditing(null); await load();
     } catch (reason) { setError(reason instanceof Error ? reason.message : "Enregistrement impossible."); }
   };
-  const remove = async (item: SchoolClass) => {
-    if (!window.confirm(`Supprimer la classe ${item.name} ?`)) return;
-    try { await deleteClass(schoolId, item.id); setClasses((current) => current.filter((row) => row.id !== item.id)); }
-    catch (reason) { setError(reason instanceof Error ? reason.message : "Suppression impossible."); }
+  const toggleClassStatus = async (item: SchoolClass) => {
+    setError(""); setMessage(""); setTogglingClassId(item.id);
+    try {
+      const nextStatus = !item.is_active;
+      await updateClass(schoolId, item.id, { is_active: nextStatus });
+      setClasses((current) => current.map((row) => row.id === item.id ? { ...row, is_active: nextStatus } : row));
+      setMessage(`Classe ${nextStatus ? "activée" : "désactivée"} avec succès.`);
+    } catch (reason) { setError(reason instanceof Error ? reason.message : "Changement de statut impossible."); }
+    finally { setTogglingClassId(null); }
   };
   const openCreateForm = () => {
     setEditing(null); setSelectedCycle(""); setSelectedLevel(""); setSelectedSeries(""); setShowForm(true);
@@ -105,9 +112,10 @@ export default function Classes() {
     {error && <div className="form-error" role="alert">{error}</div>}{message && <div className="form-success">{message}</div>}
     {!activeAcademicYear ? <div className="empty-state"><p className="empty-title">Sélectionnez une année académique</p></div>
       : classes.length === 0 ? <div className="empty-state"><p className="empty-title">Aucune classe créée pour cette année</p></div>
-      : <div className="teachers-table-wrap"><table className="teachers-table"><thead><tr><th>Nom de la classe</th><th>Cycle</th><th>Niveau</th><th>Série</th><th>Effectif</th><th>Titulaire</th><th>Matières</th><th>Actions</th></tr></thead>
-        <tbody>{classes.map((item) => <tr key={item.id}><td className="class-name-cell"><strong>{item.group}</strong></td><td>{item.cycle_label}</td><td>{item.level_name}</td><td>{item.series || "—"}</td><td><strong className={item.effectif > 50 ? "class-size-over" : "class-size-ok"}>{item.effectif}</strong></td><td>{item.homeroom_teacher_name || "—"}</td><td>{item.subjects.length}</td>
-          <td><div className="actions-cell"><button className="btn-assign" onClick={() => openTeacherAssignment(item)}>Titulaire</button><button className="subject-edit-btn" onClick={() => openSubjectSettings(item)}>Paramétrer matières</button><button className="subject-edit-btn" onClick={() => openEditForm(item)}>Modifier</button><button className="subject-delete-btn" onClick={() => void remove(item)}>Supprimer</button></div></td></tr>)}</tbody></table></div>}
+      : <div className="teachers-table-wrap classes-table-wrap"><table className="teachers-table classes-table"><thead><tr><th>Nom de la classe</th><th>Cycle</th><th>Niveau</th><th>Série</th><th>Effectif</th><th>Capacité max.</th><th>Titulaire</th><th>Matières</th><th>Statut</th><th>Actions</th></tr></thead>
+        <tbody>{classes.map((item) => <tr key={item.id} className={!item.is_active ? "class-row-inactive" : undefined}><td className="class-name-cell"><strong>{item.group}</strong></td><td>{item.cycle_label}</td><td>{item.level_name}</td><td>{item.series || "—"}</td><td><strong className={item.effectif > item.maximum_capacity ? "class-size-over" : "class-size-ok"}>{item.effectif}</strong></td><td><strong>{item.maximum_capacity}</strong></td><td>{item.homeroom_teacher_name || "—"}</td><td>{item.subjects.length}</td>
+          <td><button type="button" className={`class-status-toggle${item.is_active ? " is-active" : ""}`} role="switch" aria-checked={item.is_active} disabled={togglingClassId === item.id} onClick={() => void toggleClassStatus(item)}><span className="class-status-track"><span className="class-status-thumb" /></span><span className={item.is_active ? "class-status-active" : "class-status-inactive"}>{item.is_active ? "Active" : "Inactive"}</span></button></td>
+          <td><div className="actions-cell"><button className="btn-assign" disabled={!item.is_active} onClick={() => openTeacherAssignment(item)}>Titulaire</button><button className="subject-edit-btn" disabled={!item.is_active} onClick={() => openSubjectSettings(item)}>Paramétrer matières</button><button className="subject-edit-btn" disabled={!item.is_active} onClick={() => openEditForm(item)}>Modifier</button></div></td></tr>)}</tbody></table></div>}
 
     {showForm && <div className="teacher-modal-backdrop" onMouseDown={() => setShowForm(false)}><form className="teacher-modal class-modal" onSubmit={submit} onMouseDown={(event) => event.stopPropagation()}>
       <button type="button" className="modal-close" onClick={() => setShowForm(false)}>×</button><h2>{editing ? "Modifier la classe" : "Créer une classe"}</h2>
@@ -124,6 +132,7 @@ export default function Classes() {
         {availableSeries.map((series) => <option key={series} value={series}>{series}</option>)}
       </select></label>}
       <label>Nom de la classe *<input className="form-input" name="group" defaultValue={editing?.group ?? ""} placeholder="Ex. 6ÈME A, 2NDE A4-1" required /></label>
+      <label>Capacité maximale *<input className="form-input" name="maximum_capacity" type="number" min="1" max="1000" defaultValue={editing?.maximum_capacity ?? 50} required /></label>
       <p className="form-hint">Saisissez le nom complet à afficher, par exemple 6ÈME A ou 2NDE A4-1.</p>
       <button className="btn-primary" type="submit">{editing ? "Mettre à jour" : "Créer la classe"}</button>
     </form></div>}

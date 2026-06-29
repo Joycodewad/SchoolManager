@@ -2,7 +2,7 @@ const API_URL = import.meta.env.VITE_API_URL ?? "/api";
 export interface SchoolClass {
   id: number; name: string; level: number; level_name: string;
   cycle: "primaire" | "college" | "lycee"; cycle_label: string;
-  series: string; group: string; is_active: boolean;
+  series: string; group: string; maximum_capacity: number; is_active: boolean;
   homeroom_teacher: number | null; homeroom_teacher_name: string | null;
   subjects: ClassSubjectConfiguration[];
   effectif: number;
@@ -12,7 +12,8 @@ export interface ClassSubjectConfiguration {
   can_schedule_after_break: boolean; can_schedule_afternoon: boolean;
 }
 export interface SchoolClassPayload {
-  level: number; series: string; group: string;
+  level: number; series: string; group: string; maximum_capacity: number;
+  is_active?: boolean;
   homeroom_teacher?: number | null;
   subjects?: ClassSubjectConfiguration[];
 }
@@ -32,7 +33,7 @@ const request = async (schoolId: string, path = "", options: RequestInit = {}) =
   return data;
 };
 
-export const listClasses = (schoolId: string): Promise<SchoolClass[]> => request(schoolId);
+export const listClasses = (schoolId: string, includeInactive = false): Promise<SchoolClass[]> => request(schoolId, includeInactive ? "?include_inactive=1" : "");
 export const createClass = (schoolId: string, payload: SchoolClassPayload): Promise<SchoolClass> => request(schoolId, "", { method: "POST", body: JSON.stringify(payload) });
-export const updateClass = (schoolId: string, id: number, payload: Partial<SchoolClassPayload>): Promise<SchoolClass> => request(schoolId, `${id}/`, { method: "PATCH", body: JSON.stringify(payload) });
+export const updateClass = (schoolId: string, id: number, payload: Partial<SchoolClassPayload>): Promise<SchoolClass> => request(schoolId, `${id}/?include_inactive=1`, { method: "PATCH", body: JSON.stringify(payload) });
 export const deleteClass = (schoolId: string, id: number): Promise<void> => request(schoolId, `${id}/`, { method: "DELETE" });

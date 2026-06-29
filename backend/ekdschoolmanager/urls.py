@@ -2,7 +2,7 @@ from rest_framework.routers import DefaultRouter
 
 from django.urls import path
 
-from .views import AcademicPeriodCloseView, AcademicYearViewSet, CustomUserViewSet, EnrollmentNumberSuggestionView, LoginView, LogoutView, OwnerViewSet, RoleChoicesView, SchoolClassViewSet, SchoolLevelViewSet, SchoolViewSet, StudentEnrollmentViewSet, SubjectViewSet, TeacherViewSet, UsernameSuggestionView
+from .views import AcademicSessionDetailView, AcademicSessionListView, AcademicYearViewSet, CustomUserViewSet, EnrollmentNumberSuggestionView, ExpenseCategoryListView, GradeContextView, GradeSchemeView, GradeSheetView, LoginView, LogoutView, OwnerViewSet, RoleChoicesView, SchoolClassViewSet, SchoolExpenseDetailView, SchoolExpenseListView, SchoolLevelViewSet, SchoolViewSet, StudentEnrollmentViewSet, SubjectViewSet, TeacherViewSet, TuitionComplianceView, TuitionFeePlanDetailView, TuitionFeePlanListView, TuitionPaymentListView, UsernameSuggestionView
 
 router = DefaultRouter()
 router.register("teachers", TeacherViewSet, basename="teacher")
@@ -52,11 +52,9 @@ urlpatterns = [
         AcademicYearViewSet.as_view({"post": "close"}),
         name="close-academic-year",
     ),
-    path(
-        "schools/<int:school_pk>/academic-years/<int:year_pk>/periods/<int:period_pk>/close/",
-        AcademicPeriodCloseView.as_view(),
-        name="close-academic-period",
-    ),
+    path("schools/<int:school_pk>/academic-years/<int:year_pk>/sessions/", AcademicSessionListView.as_view(), name="academic-sessions"),
+    path("schools/<int:school_pk>/academic-years/<int:year_pk>/sessions/<int:pk>/", AcademicSessionDetailView.as_view(), name="academic-session-detail"),
+    path("schools/<int:school_pk>/academic-years/<int:year_pk>/sessions/<int:pk>/close/", AcademicSessionDetailView.as_view(), name="academic-session-close"),
     path(
         "schools/<int:school_pk>/enrollments/",
         StudentEnrollmentViewSet.as_view({"get": "list", "post": "create"}),
@@ -73,6 +71,21 @@ urlpatterns = [
         name="student-enrollments-import",
     ),
     path(
+        "schools/<int:school_pk>/enrollments/unassigned/",
+        StudentEnrollmentViewSet.as_view({"get": "unassigned"}),
+        name="student-enrollments-unassigned",
+    ),
+    path(
+        "schools/<int:school_pk>/enrollments/guardian-lookup/",
+        StudentEnrollmentViewSet.as_view({"get": "guardian_lookup"}),
+        name="student-enrollments-guardian-lookup",
+    ),
+    path(
+        "schools/<int:school_pk>/enrollments/auto-assign/",
+        StudentEnrollmentViewSet.as_view({"post": "auto_assign"}),
+        name="student-enrollments-auto-assign",
+    ),
+    path(
         "schools/<int:school_pk>/enrollments/<int:pk>/",
         StudentEnrollmentViewSet.as_view({"get": "retrieve", "patch": "partial_update", "delete": "destroy"}),
         name="student-enrollment-detail",
@@ -84,5 +97,16 @@ urlpatterns = [
     ),
     path("schools/<int:school_pk>/classes/", SchoolClassViewSet.as_view({"get": "list", "post": "create"}), name="school-classes"),
     path("schools/<int:school_pk>/classes/<int:pk>/", SchoolClassViewSet.as_view({"get": "retrieve", "patch": "partial_update", "delete": "destroy"}), name="school-class-detail"),
+    path("schools/<int:school_pk>/finance/tuition-plans/", TuitionFeePlanListView.as_view(), name="tuition-fee-plans"),
+    path("schools/<int:school_pk>/finance/tuition-plans/<int:pk>/", TuitionFeePlanDetailView.as_view(), name="tuition-fee-plan-detail"),
+    path("schools/<int:school_pk>/finance/tuition-plans/<int:pk>/copy/", TuitionFeePlanDetailView.as_view(), name="tuition-fee-plan-copy"),
+    path("schools/<int:school_pk>/finance/payments/", TuitionPaymentListView.as_view(), name="tuition-payments"),
+    path("schools/<int:school_pk>/finance/compliance/", TuitionComplianceView.as_view(), name="tuition-compliance"),
+    path("schools/<int:school_pk>/finance/expense-categories/", ExpenseCategoryListView.as_view(), name="expense-categories"),
+    path("schools/<int:school_pk>/finance/expenses/", SchoolExpenseListView.as_view(), name="school-expenses"),
+    path("schools/<int:school_pk>/finance/expenses/<int:pk>/", SchoolExpenseDetailView.as_view(), name="school-expense-detail"),
+    path("schools/<int:school_pk>/grades/contexts/", GradeContextView.as_view(), name="grade-contexts"),
+    path("schools/<int:school_pk>/grades/sessions/<int:session_pk>/scheme/", GradeSchemeView.as_view(), name="grade-scheme"),
+    path("schools/<int:school_pk>/grades/sessions/<int:session_pk>/subjects/<int:class_subject_pk>/", GradeSheetView.as_view(), name="grade-sheet"),
     *router.urls,
 ]

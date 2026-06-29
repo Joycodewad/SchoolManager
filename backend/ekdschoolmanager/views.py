@@ -5,10 +5,11 @@ import re
 import zipfile
 import xml.etree.ElementTree as ET
 from datetime import date, datetime, timedelta
+from decimal import Decimal
 
 from django.contrib.auth import authenticate
 from django.db import transaction
-from django.db.models import Count, Q
+from django.db.models import Count, Q, Sum
 from django.utils.text import slugify
 from rest_framework import serializers, status, viewsets
 from rest_framework.authtoken.models import Token
@@ -18,8 +19,8 @@ from rest_framework.permissions import AllowAny, BasePermission
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .models import AcademicPeriod, AcademicYear, ClassSubject, CustomUser, School, SchoolClass, SchoolLevel, SchoolMembership, StudentEnrollment, Subject, TeacherAssignmentSubject, TeacherClassAssignment, TeacherUnavailability
-from .serializers import AcademicPeriodSerializer, AcademicYearSerializer, CustomUserSerializer, SchoolClassSerializer, SchoolLevelSerializer, SchoolMembershipSerializer, SchoolSerializer, StudentEnrollmentSerializer, SubjectSerializer
+from .models import AcademicSession, AcademicYear, ClassFeeItem, ClassSubject, CustomUser, ExpenseCategory, FeeInstallment, FeePayment, GradeEntry, GradeScheme, School, SchoolClass, SchoolExpense, SchoolLevel, SchoolMembership, StudentEnrollment, Subject, TeacherAssignmentSubject, TeacherClassAssignment, TeacherUnavailability, TuitionFeePlan
+from .serializers import AcademicSessionSerializer, AcademicYearSerializer, CustomUserSerializer, ExpenseCategorySerializer, FeePaymentSerializer, GradeSchemeSerializer, SchoolClassSerializer, SchoolExpenseSerializer, SchoolLevelSerializer, SchoolMembershipSerializer, SchoolSerializer, StudentEnrollmentSerializer, SubjectSerializer, TuitionFeePlanSerializer, normalize_togolese_phone
 
 
 XLSX_NS = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
@@ -259,6 +260,430 @@ class SchoolScopedMixin:
             raise serializers.ValidationError({"permission": "Vous ne pouvez pas gérer le personnel de cette école."})
 
 
+class FinanceMixin(SchoolScopedMixin):
+    def ensure_fee_configurator(self):
+        school = self.get_school()
+        allowed_roles = [CustomUser.Role.OWNER, CustomUser.Role.CENSEUR, CustomUser.Role.PROVISEUR]
+        if not (
+            self.request.user.is_superuser
+            or school.owner_id == self.request.user.id
+            or school.memberships.filter(user=self.request.user, role__in=allowed_roles, is_active=True).exists()
+        ):
+            raise serializers.ValidationError({"permission": "Seuls le propriétaire, le censeur ou le proviseur peuvent configurer l’écolage."})
+
+    def ensure_finance_manager(self):
+        school = self.get_school()
+        allowed_roles = [CustomUser.Role.ADMIN, CustomUser.Role.OWNER, CustomUser.Role.PROVISEUR, CustomUser.Role.ACCOUNTANT]
+        if not (
+            self.request.user.is_superuser
+            or school.owner_id == self.request.user.id
+            or school.memberships.filter(user=self.request.user, role__in=allowed_roles, is_active=True).exists()
+        ):
+            raise serializers.ValidationError({"permission": "Vous ne pouvez pas gérer les finances de cette école."})
+
+    def get_academic_year(self):
+        year_id = self.request.headers.get("X-Academic-Year-ID")
+        if not year_id:
+            raise serializers.ValidationError({"academic_year": "Sélectionnez une année académique."})
+        try:
+            return AcademicYear.objects.get(pk=year_id, school=self.get_school())
+        except (AcademicYear.DoesNotExist, ValueError):
+            raise serializers.ValidationError({"academic_year": "Année académique invalide."})
+
+
+class TuitionFeePlanListView(FinanceMixin, APIView):
+    def get(self, request, school_pk):
+        year = self.get_academic_year()
+        plans = TuitionFeePlan.objects.filter(school=self.get_school(), academic_year=year).select_related(
+            "school_class", "school_class__level"
+        ).prefetch_related("items__fee_module", "items__installments")
+        return Response(TuitionFeePlanSerializer(plans, many=True).data)
+
+    def post(self, request, school_pk):
+        self.ensure_fee_configurator()
+        year = self.get_academic_year()
+        serializer = TuitionFeePlanSerializer(data=request.data, context={"school": self.get_school(), "academic_year": year})
+        serializer.is_valid(raise_exception=True)
+        serializer.save(school=self.get_school(), academic_year=year)
+        return Response(serializer.data, status=201)
+
+
+class TuitionFeePlanDetailView(FinanceMixin, APIView):
+    def get_object(self, pk):
+        try:
+            return TuitionFeePlan.objects.prefetch_related("items__fee_module", "items__installments").get(
+                pk=pk, school=self.get_school(), academic_year=self.get_academic_year()
+            )
+        except TuitionFeePlan.DoesNotExist:
+            raise serializers.ValidationError({"plan": "Barème introuvable."})
+
+    def patch(self, request, school_pk, pk):
+        self.ensure_fee_configurator()
+        plan = self.get_object(pk)
+        serializer = TuitionFeePlanSerializer(plan, data=request.data, partial=True, context={"school": self.get_school(), "academic_year": self.get_academic_year()})
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+
+    def delete(self, request, school_pk, pk):
+        self.ensure_fee_configurator()
+        plan = self.get_object(pk)
+        if plan.items.filter(payments__isnull=False).exists():
+            return Response({"detail": "Ce barème possède des paiements et ne peut pas être supprimé."}, status=400)
+        plan.delete()
+        return Response(status=204)
+
+    def post(self, request, school_pk, pk):
+        self.ensure_fee_configurator()
+        source = self.get_object(pk)
+        target_ids = request.data.get("target_classes", [])
+        if not isinstance(target_ids, list) or not target_ids:
+            raise serializers.ValidationError({"target_classes": "Sélectionnez au moins une classe cible."})
+        try:
+            normalized_ids = {int(value) for value in target_ids}
+        except (TypeError, ValueError):
+            raise serializers.ValidationError({"target_classes": "Une ou plusieurs classes cibles sont invalides."})
+        if source.school_class_id in normalized_ids:
+            raise serializers.ValidationError({"target_classes": "La classe source ne peut pas être une cible."})
+        target_classes = list(SchoolClass.objects.filter(
+            pk__in=normalized_ids, school=self.get_school(), academic_year=self.get_academic_year(),
+        ))
+        if len(target_classes) != len(normalized_ids):
+            raise serializers.ValidationError({"target_classes": "Une ou plusieurs classes cibles sont invalides."})
+        existing_plans = {
+            plan.school_class_id: plan for plan in TuitionFeePlan.objects.filter(
+                school_class_id__in=normalized_ids,
+            ).prefetch_related("items__payments")
+        }
+        blocked = [school_class.name for school_class in target_classes if (
+            existing_plans.get(school_class.id)
+            and existing_plans[school_class.id].items.filter(payments__isnull=False).exists()
+        )]
+        if blocked:
+            return Response({"detail": f"Copie impossible : des paiements existent déjà pour {', '.join(blocked)}."}, status=400)
+        source_items = list(source.items.select_related("fee_module").prefetch_related("installments"))
+        created_plans = []
+        with transaction.atomic():
+            for target_class in target_classes:
+                existing = existing_plans.get(target_class.id)
+                if existing:
+                    existing.delete()
+                target = TuitionFeePlan.objects.create(
+                    school=self.get_school(), academic_year=self.get_academic_year(), school_class=target_class,
+                )
+                for source_item in source_items:
+                    target_item = ClassFeeItem.objects.create(
+                        plan=target, fee_module=source_item.fee_module,
+                        male_amount=source_item.male_amount, female_amount=source_item.female_amount,
+                        payable_in_installments=source_item.payable_in_installments,
+                    )
+                    FeeInstallment.objects.bulk_create([
+                        FeeInstallment(
+                            class_fee=target_item, name=row.name, percentage=row.percentage,
+                            due_date=row.due_date, order=row.order,
+                        ) for row in source_item.installments.all()
+                    ])
+                created_plans.append(target.id)
+        targets = TuitionFeePlan.objects.filter(pk__in=created_plans).prefetch_related("items__fee_module", "items__installments")
+        return Response(TuitionFeePlanSerializer(targets, many=True).data, status=201)
+
+
+class TuitionPaymentListView(FinanceMixin, APIView):
+    def get(self, request, school_pk):
+        year = self.get_academic_year()
+        queryset = FeePayment.objects.filter(
+            enrollment__school=self.get_school(), enrollment__academic_year=year,
+        ).select_related("enrollment__student", "enrollment__school_class", "class_fee__fee_module", "installment", "received_by")
+        if request.query_params.get("class_id"):
+            queryset = queryset.filter(enrollment__school_class_id=request.query_params["class_id"])
+        return Response(FeePaymentSerializer(queryset, many=True).data)
+
+    def post(self, request, school_pk):
+        self.ensure_finance_manager()
+        serializer = FeePaymentSerializer(data=request.data, context={"school": self.get_school(), "academic_year": self.get_academic_year()})
+        serializer.is_valid(raise_exception=True)
+        serializer.save(received_by=request.user)
+        return Response(serializer.data, status=201)
+
+
+class TuitionComplianceView(FinanceMixin, APIView):
+    def get(self, request, school_pk):
+        year = self.get_academic_year()
+        class_id = request.query_params.get("class_id")
+        target = request.query_params.get("target")
+        if not class_id:
+            raise serializers.ValidationError({"class_id": "Sélectionnez une classe."})
+        try:
+            plan = TuitionFeePlan.objects.prefetch_related("items__fee_module", "items__installments").get(
+                school=self.get_school(), academic_year=year, school_class_id=class_id,
+            )
+        except TuitionFeePlan.DoesNotExist:
+            raise serializers.ValidationError({"plan": "Définissez d’abord le barème de cette classe."})
+        if not target:
+            raise serializers.ValidationError({"target": "Sélectionnez une rubrique de frais."})
+        installment = None
+        try:
+            if target.startswith("installment:"):
+                installment = FeeInstallment.objects.select_related("class_fee__fee_module").get(pk=target.split(":", 1)[1], class_fee__plan=plan)
+                class_fee = installment.class_fee
+            else:
+                class_fee_id = target.split(":", 1)[1] if target.startswith("item:") else target
+                class_fee = ClassFeeItem.objects.select_related("fee_module").get(pk=class_fee_id, plan=plan)
+        except (ValueError, IndexError, FeeInstallment.DoesNotExist, ClassFeeItem.DoesNotExist):
+            raise serializers.ValidationError({"target": "Rubrique ou tranche invalide."})
+        enrollments = StudentEnrollment.objects.filter(
+            school=self.get_school(), academic_year=year, school_class_id=class_id, status=StudentEnrollment.Status.ACTIVE,
+        ).select_related("student", "school_class")
+        rows = []
+        for enrollment in enrollments:
+            base_amount = class_fee.female_amount if enrollment.student.gender == CustomUser.Gender.FEMALE else class_fee.male_amount
+            expected = base_amount if installment is None else (base_amount * installment.percentage / Decimal("100")).quantize(Decimal("0.01"))
+            payments = enrollment.fee_payments.filter(class_fee=class_fee)
+            if installment is not None:
+                payments = payments.filter(installment=installment)
+            paid = payments.aggregate(total=Sum("amount"))["total"] or Decimal("0")
+            rows.append({
+                "enrollment": enrollment.id, "enrollment_number": enrollment.enrollment_number,
+                "student_name": enrollment.student.get_full_name(), "gender": enrollment.student.get_gender_display(),
+                "student_status": enrollment.student.get_student_status_display(), "expected": expected,
+                "paid": paid, "balance": max(expected - paid, Decimal("0")), "is_compliant": paid >= expected,
+            })
+        return Response({
+            "plan": TuitionFeePlanSerializer(plan).data,
+            "target": class_fee.fee_module.name if installment is None else f"{class_fee.fee_module.name} — {installment.name}",
+            "compliant_count": sum(row["is_compliant"] for row in rows),
+            "non_compliant_count": sum(not row["is_compliant"] for row in rows),
+            "students": rows,
+        })
+
+
+class ExpenseCategoryListView(FinanceMixin, APIView):
+    def get(self, request, school_pk):
+        categories = ExpenseCategory.objects.filter(school=self.get_school(), is_active=True)
+        return Response(ExpenseCategorySerializer(categories, many=True).data)
+
+    def post(self, request, school_pk):
+        self.ensure_finance_manager()
+        serializer = ExpenseCategorySerializer(data=request.data, context={"school": self.get_school()})
+        serializer.is_valid(raise_exception=True)
+        serializer.save(school=self.get_school())
+        return Response(serializer.data, status=201)
+
+
+class SchoolExpenseListView(FinanceMixin, APIView):
+    def get(self, request, school_pk):
+        year = self.get_academic_year()
+        queryset = SchoolExpense.objects.filter(
+            school=self.get_school(), academic_year=year,
+        ).select_related("category", "recorded_by")
+        category_id = request.query_params.get("category")
+        if category_id:
+            queryset = queryset.filter(category_id=category_id)
+        if request.query_params.get("date_from"):
+            queryset = queryset.filter(expense_date__gte=request.query_params["date_from"])
+        if request.query_params.get("date_to"):
+            queryset = queryset.filter(expense_date__lte=request.query_params["date_to"])
+        search = request.query_params.get("search", "").strip()
+        if search:
+            queryset = queryset.filter(Q(label__icontains=search) | Q(beneficiary__icontains=search) | Q(reference__icontains=search))
+        return Response(SchoolExpenseSerializer(queryset, many=True).data)
+
+    def post(self, request, school_pk):
+        self.ensure_finance_manager()
+        serializer = SchoolExpenseSerializer(data=request.data, context={"school": self.get_school()})
+        serializer.is_valid(raise_exception=True)
+        serializer.save(school=self.get_school(), academic_year=self.get_academic_year(), recorded_by=request.user)
+        return Response(serializer.data, status=201)
+
+
+class SchoolExpenseDetailView(FinanceMixin, APIView):
+    def get_object(self, pk):
+        try:
+            return SchoolExpense.objects.select_related("category", "recorded_by").get(
+                pk=pk, school=self.get_school(), academic_year=self.get_academic_year(),
+            )
+        except SchoolExpense.DoesNotExist:
+            raise serializers.ValidationError({"expense": "Dépense introuvable."})
+
+    def patch(self, request, school_pk, pk):
+        self.ensure_finance_manager()
+        serializer = SchoolExpenseSerializer(
+            self.get_object(pk), data=request.data, partial=True, context={"school": self.get_school()},
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+
+    def delete(self, request, school_pk, pk):
+        self.ensure_finance_manager()
+        self.get_object(pk).delete()
+        return Response(status=204)
+
+
+class GradeMixin(SchoolScopedMixin):
+    def get_academic_year(self):
+        try:
+            return AcademicYear.objects.get(pk=self.request.headers.get("X-Academic-Year-ID"), school=self.get_school())
+        except (AcademicYear.DoesNotExist, ValueError, TypeError):
+            raise serializers.ValidationError({"academic_year": "Sélectionnez une année académique valide."})
+
+    def can_configure_grades(self):
+        school = self.get_school()
+        roles = [CustomUser.Role.OWNER, CustomUser.Role.ADMIN, CustomUser.Role.CENSEUR, CustomUser.Role.PROVISEUR]
+        return self.request.user.is_superuser or school.owner_id == self.request.user.id or school.memberships.filter(user=self.request.user, role__in=roles, is_active=True).exists()
+
+    def ensure_grade_access(self):
+        if self.can_configure_grades():
+            return
+        if self.request.user.role == CustomUser.Role.TEACHER or self.get_school().memberships.filter(user=self.request.user, role=CustomUser.Role.TEACHER, is_active=True).exists():
+            return
+        raise serializers.ValidationError({"permission": "Vous n’avez pas accès aux notes."})
+
+    def ensure_grade_configurator(self):
+        if not self.can_configure_grades():
+            raise serializers.ValidationError({"permission": "Seuls le propriétaire, l’administrateur, le censeur ou le proviseur peuvent configurer les notes."})
+
+    def can_access_class_subject(self, class_subject):
+        if self.can_configure_grades():
+            return True
+        return TeacherAssignmentSubject.objects.filter(
+            assignment__teacher=self.request.user,
+            assignment__school=self.get_school(),
+            assignment__academic_year=class_subject.school_class.academic_year,
+            assignment__school_class=class_subject.school_class,
+            class_subject=class_subject,
+        ).exists()
+
+
+class GradeContextView(GradeMixin, APIView):
+    def get(self, request, school_pk):
+        self.ensure_grade_access()
+        year = self.get_academic_year()
+        sessions = AcademicSession.objects.filter(academic_year=year, is_active=True, is_closed=False).prefetch_related("classes__level", "classes__subject_configurations__subject")
+        result = []
+        for session in sessions:
+            classes = []
+            for school_class in session.classes.all():
+                subjects = [config for config in school_class.subject_configurations.all() if self.can_access_class_subject(config)]
+                if subjects or self.can_configure_grades():
+                    classes.append({
+                        "id": school_class.id,
+                        "name": " ".join(part for part in (school_class.level.name, school_class.series, school_class.group) if part),
+                        "subjects": [{"id": config.id, "name": config.subject.name} for config in subjects],
+                    })
+            if classes:
+                result.append({"id": session.id, "name": session.name, "label": session.label, "classes": classes})
+        return Response({"can_configure": self.can_configure_grades(), "sessions": result})
+
+
+class GradeSchemeView(GradeMixin, APIView):
+    def get_session(self, session_pk):
+        try:
+            return AcademicSession.objects.get(pk=session_pk, academic_year=self.get_academic_year())
+        except AcademicSession.DoesNotExist:
+            raise serializers.ValidationError({"session": "Session académique invalide."})
+
+    def get(self, request, school_pk, session_pk):
+        self.ensure_grade_access()
+        session = self.get_session(session_pk)
+        try:
+            scheme = GradeScheme.objects.prefetch_related("lines", "groups__lines").get(session=session)
+        except GradeScheme.DoesNotExist:
+            return Response(None)
+        return Response(GradeSchemeSerializer(scheme).data)
+
+    def put(self, request, school_pk, session_pk):
+        self.ensure_grade_configurator()
+        session = self.get_session(session_pk)
+        scheme = GradeScheme.objects.filter(session=session).first()
+        serializer = GradeSchemeSerializer(scheme, data=request.data) if scheme else GradeSchemeSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        serializer.save(session=session, created_by=request.user) if scheme is None else serializer.save()
+        return Response(serializer.data, status=201 if scheme is None else 200)
+
+
+class GradeSheetView(GradeMixin, APIView):
+    def get_context(self, session_pk, class_subject_pk):
+        year = self.get_academic_year()
+        try:
+            session = AcademicSession.objects.get(pk=session_pk, academic_year=year, is_active=True, is_closed=False)
+            class_subject = ClassSubject.objects.select_related("school_class", "subject").get(pk=class_subject_pk, school_class__academic_year=year, school_class__school=self.get_school())
+        except (AcademicSession.DoesNotExist, ClassSubject.DoesNotExist):
+            raise serializers.ValidationError({"context": "Session, classe ou matière invalide."})
+        if not session.classes.filter(pk=class_subject.school_class_id).exists():
+            raise serializers.ValidationError({"session": "Cette classe n’appartient pas à la session."})
+        if not self.can_access_class_subject(class_subject):
+            raise serializers.ValidationError({"permission": "Cette matière ne vous est pas affectée dans cette classe."})
+        try:
+            scheme = GradeScheme.objects.prefetch_related("lines", "groups__lines").get(session=session)
+        except GradeScheme.DoesNotExist:
+            raise serializers.ValidationError({"configuration": "Les lignes de notes ne sont pas encore configurées pour cette session."})
+        return session, class_subject, scheme
+
+    @staticmethod
+    def calculate_average(scheme, scores):
+        lines = list(scheme.lines.all())
+        if not lines or any(line.id not in scores for line in lines):
+            return None
+        normalized = {line.id: scores[line.id] * Decimal("20") / line.max_score for line in lines}
+        if scheme.calculation_method == GradeScheme.CalculationMethod.WEIGHTED:
+            return sum(normalized[line.id] * line.weight / Decimal("100") for line in lines)
+        if scheme.calculation_method == GradeScheme.CalculationMethod.GROUPS:
+            group_averages = []
+            groups = list(scheme.groups.all())
+            legacy_group_weight = Decimal("100") / len(groups)
+            for group in groups:
+                group_lines = list(group.lines.all())
+                legacy_line_weight = Decimal("100") / len(group_lines)
+                group_average = sum(
+                    normalized[line.id] * (line.weight or legacy_line_weight) / Decimal("100")
+                    for line in group_lines
+                )
+                group_averages.append(group_average * (group.weight or legacy_group_weight) / Decimal("100"))
+            return sum(group_averages)
+        return sum(normalized.values()) / len(normalized)
+
+    def get(self, request, school_pk, session_pk, class_subject_pk):
+        self.ensure_grade_access()
+        _, class_subject, scheme = self.get_context(session_pk, class_subject_pk)
+        enrollments = StudentEnrollment.objects.filter(school_class=class_subject.school_class, status=StudentEnrollment.Status.ACTIVE).select_related("student").order_by("student__last_name", "student__first_name")
+        entries = GradeEntry.objects.filter(class_subject=class_subject, line__scheme=scheme)
+        entry_map = {(entry.enrollment_id, entry.line_id): entry.score for entry in entries}
+        rows = []
+        for enrollment in enrollments:
+            scores = {line.id: entry_map[(enrollment.id, line.id)] for line in scheme.lines.all() if (enrollment.id, line.id) in entry_map}
+            average = self.calculate_average(scheme, scores)
+            rows.append({"enrollment": enrollment.id, "matricule": enrollment.enrollment_number, "student_name": enrollment.student.get_full_name(), "scores": {str(key): value for key, value in scores.items()}, "average": average.quantize(Decimal("0.01")) if average is not None else None})
+        return Response({"scheme": GradeSchemeSerializer(scheme).data, "class_subject": {"id": class_subject.id, "subject": class_subject.subject.name}, "students": rows})
+
+    def post(self, request, school_pk, session_pk, class_subject_pk):
+        self.ensure_grade_access()
+        _, class_subject, scheme = self.get_context(session_pk, class_subject_pk)
+        lines = {line.id: line for line in scheme.lines.all()}
+        enrollment_ids = set(StudentEnrollment.objects.filter(school_class=class_subject.school_class, status=StudentEnrollment.Status.ACTIVE).values_list("id", flat=True))
+        grades = request.data.get("grades", [])
+        errors = []
+        prepared = []
+        for index, item in enumerate(grades, start=1):
+            try:
+                enrollment_id, line_id = int(item["enrollment"]), int(item["line"])
+                score = Decimal(str(item["score"]))
+                if enrollment_id not in enrollment_ids or line_id not in lines or score < 0 or score > lines[line_id].max_score:
+                    raise ValueError
+                prepared.append((enrollment_id, line_id, score))
+            except (KeyError, TypeError, ValueError, ArithmeticError):
+                errors.append(f"Note invalide à la ligne {index}.")
+        if errors:
+            return Response({"grades": errors}, status=400)
+        with transaction.atomic():
+            for enrollment_id, line_id, score in prepared:
+                GradeEntry.objects.update_or_create(
+                    enrollment_id=enrollment_id, line_id=line_id, class_subject=class_subject,
+                    defaults={"score": score, "entered_by": request.user},
+                )
+        return self.get(request, school_pk, session_pk, class_subject_pk)
+
+
 class CustomUserViewSet(SchoolScopedMixin, viewsets.ModelViewSet):
     serializer_class = CustomUserSerializer
 
@@ -308,7 +733,7 @@ class TeacherViewSet(CustomUserViewSet):
             ],
             school_memberships__is_active=True,
             is_archived=False,
-        ).select_related("primary_subject", "secondary_subject", "tertiary_subject").distinct()
+        ).select_related("primary_subject").prefetch_related("subjects").distinct()
 
     def perform_create(self, serializer):
         role = serializer.validated_data.get("role", CustomUser.Role.TEACHER)
@@ -392,11 +817,7 @@ class TeacherViewSet(CustomUserViewSet):
         class_map = {school_class.id: school_class for school_class in classes}
         prepared = []
         selected_config_ids = []
-        teacher_subject_ids = {
-            subject_id for subject_id in (
-                teacher.primary_subject_id, teacher.secondary_subject_id, teacher.tertiary_subject_id,
-            ) if subject_id
-        }
+        teacher_subject_ids = set(teacher.subjects.values_list("id", flat=True))
         for item in requested:
             subject_ids = list(dict.fromkeys(item.get("subject_ids", [])))
             if not subject_ids:
@@ -492,7 +913,7 @@ class AcademicYearViewSet(SchoolScopedMixin, viewsets.ModelViewSet):
     serializer_class = AcademicYearSerializer
 
     def get_queryset(self):
-        return AcademicYear.objects.filter(school=self.get_school()).prefetch_related("periods")
+        return AcademicYear.objects.filter(school=self.get_school()).prefetch_related("sessions__classes")
 
     def perform_create(self, serializer):
         self.ensure_manager()
@@ -544,37 +965,62 @@ class AcademicYearViewSet(SchoolScopedMixin, viewsets.ModelViewSet):
             academic_year.is_closed = True
             academic_year.is_active = False
             academic_year.save(update_fields=["is_closed", "is_active"])
-            academic_year.periods.update(is_active=False, is_closed=True)
+            academic_year.sessions.update(is_active=False)
         return Response(self.get_serializer(academic_year).data)
 
 
-class AcademicPeriodCloseView(SchoolScopedMixin, APIView):
-    def post(self, request, school_pk, year_pk, period_pk):
-        self.ensure_manager()
+class AcademicSessionListView(SchoolScopedMixin, APIView):
+    def get_academic_year(self, year_pk):
         try:
-            period = AcademicPeriod.objects.select_related("academic_year").get(
-                pk=period_pk,
-                academic_year_id=year_pk,
-                academic_year__school=self.get_school(),
-            )
-        except AcademicPeriod.DoesNotExist:
-            return Response({"detail": "Période introuvable."}, status=404)
-        if period.is_closed:
-            return Response({"detail": "Cette période est déjà clôturée."}, status=400)
-        if not period.is_active:
-            return Response({"detail": "Seule la période active peut être clôturée."}, status=400)
+            return AcademicYear.objects.get(pk=year_pk, school=self.get_school())
+        except AcademicYear.DoesNotExist:
+            raise serializers.ValidationError({"academic_year": "Année académique introuvable."})
+
+    def get(self, request, school_pk, year_pk):
+        year = self.get_academic_year(year_pk)
+        return Response(AcademicSessionSerializer(year.sessions.all(), many=True).data)
+
+    def post(self, request, school_pk, year_pk):
+        self.ensure_manager()
+        year = self.get_academic_year(year_pk)
+        if not year.is_active or year.is_closed:
+            raise serializers.ValidationError({"academic_year": "Les sessions ne peuvent être créées que dans l’année académique active."})
+        serializer = AcademicSessionSerializer(data={**request.data, "is_active": True}, context={"academic_year": year})
+        serializer.is_valid(raise_exception=True)
         with transaction.atomic():
-            period.is_closed = True
-            period.is_active = False
-            period.save(update_fields=["is_closed", "is_active"])
-            if period.academic_year.is_active:
-                next_period = period.academic_year.periods.filter(
-                    number__gt=period.number, is_closed=False
-                ).order_by("number").first()
-                if next_period:
-                    next_period.is_active = True
-                    next_period.save(update_fields=["is_active"])
-        return Response(AcademicPeriodSerializer(period).data)
+            serializer.save(academic_year=year)
+        return Response(serializer.data, status=201)
+
+
+class AcademicSessionDetailView(AcademicSessionListView):
+    def get_object(self, year_pk, pk):
+        year = self.get_academic_year(year_pk)
+        try:
+            return year.sessions.get(pk=pk), year
+        except AcademicSession.DoesNotExist:
+            raise serializers.ValidationError({"session": "Session académique introuvable."})
+
+    def patch(self, request, school_pk, year_pk, pk):
+        self.ensure_manager()
+        session, year = self.get_object(year_pk, pk)
+        serializer = AcademicSessionSerializer(session, data=request.data, partial=True, context={"academic_year": year})
+        serializer.is_valid(raise_exception=True)
+        with transaction.atomic():
+            serializer.save()
+        return Response(serializer.data)
+
+    def delete(self, request, school_pk, year_pk, pk):
+        return Response({"detail": "Une session doit être clôturée et non supprimée."}, status=405)
+
+    def post(self, request, school_pk, year_pk, pk):
+        self.ensure_manager()
+        session, _ = self.get_object(year_pk, pk)
+        if session.is_closed:
+            return Response({"detail": "Cette session est déjà clôturée."}, status=400)
+        session.is_closed = True
+        session.is_active = False
+        session.save(update_fields=["is_closed", "is_active"])
+        return Response(AcademicSessionSerializer(session).data)
 
 
 class StudentEnrollmentViewSet(SchoolScopedMixin, viewsets.ModelViewSet):
@@ -597,7 +1043,7 @@ class StudentEnrollmentViewSet(SchoolScopedMixin, viewsets.ModelViewSet):
             school=self.get_school(),
             academic_year=self.get_academic_year(),
             status=StudentEnrollment.Status.ACTIVE,
-        ).select_related("student", "academic_year", "level", "school_class")
+        ).select_related("student", "guardian", "academic_year", "level", "school_class")
 
     def get_serializer_context(self):
         context = super().get_serializer_context()
@@ -621,6 +1067,183 @@ class StudentEnrollmentViewSet(SchoolScopedMixin, viewsets.ModelViewSet):
     def perform_update(self, serializer):
         self.ensure_manager()
         serializer.save()
+
+    def eligible_unassigned_queryset(self):
+        return self.get_queryset().filter(
+            school_class__isnull=True,
+        ).exclude(
+            student__student_status__in=[
+                CustomUser.StudentStatus.DROPPED_OUT,
+                CustomUser.StudentStatus.BACHELOR,
+            ]
+        )
+
+    @action(detail=False, methods=["get"], url_path="guardian-lookup")
+    def guardian_lookup(self, request, school_pk=None):
+        try:
+            phone = normalize_togolese_phone(request.query_params.get("phone"))
+        except serializers.ValidationError as exc:
+            return Response({"phone": exc.detail}, status=400)
+        guardian = CustomUser.objects.filter(role=CustomUser.Role.PARENT, phone=phone).first()
+        if guardian is None:
+            return Response({"found": False, "phone": phone})
+        return Response({
+            "found": True,
+            "id": guardian.pk,
+            "phone": guardian.phone,
+            "last_name": guardian.last_name,
+            "first_names": guardian.first_name,
+            "profession": guardian.profession,
+        })
+
+    @action(detail=False, methods=["get"], url_path="unassigned")
+    def unassigned(self, request, school_pk=None):
+        queryset = self.eligible_unassigned_queryset().order_by(
+            "level__order", "series", "student__last_name", "student__first_name",
+        )
+        return Response(self.get_serializer(queryset, many=True).data)
+
+    @action(detail=False, methods=["post"], url_path="auto-assign")
+    def auto_assign(self, request, school_pk=None):
+        self.ensure_manager()
+        school = self.get_school()
+        academic_year = self.get_academic_year()
+        if not academic_year.is_active or academic_year.is_closed:
+            return Response({"academic_year": "L’année académique doit être active."}, status=400)
+
+        students = list(self.eligible_unassigned_queryset())
+        if not students:
+            return Response({"message": "Aucun élève éligible sans classe.", "assigned": 0, "warnings": []})
+
+        classes = list(SchoolClass.objects.filter(
+            school=school, academic_year=academic_year, is_active=True,
+        ).annotate(
+            effectif=Count(
+                "student_enrollments",
+                filter=Q(student_enrollments__status=StudentEnrollment.Status.ACTIVE),
+                distinct=True,
+            ),
+        ).select_related("level"))
+
+        def group_key(level_id, series):
+            return level_id, (series or "").strip().casefold()
+
+        def natural_class_key(school_class):
+            return tuple(
+                (token.isdigit(), int(token) if token.isdigit() else token.casefold())
+                for token in re.split(r"(\d+)", school_class.group)
+                if token
+            )
+
+        classes_by_group = {}
+        for school_class in classes:
+            classes_by_group.setdefault(group_key(school_class.level_id, school_class.series), []).append(school_class)
+        for grouped_classes in classes_by_group.values():
+            grouped_classes.sort(key=natural_class_key)
+
+        students_by_group = {}
+        for enrollment in students:
+            students_by_group.setdefault(group_key(enrollment.level_id, enrollment.series), []).append(enrollment)
+
+        warnings = []
+        assignments = []
+        summary = []
+
+        def student_rank(enrollment):
+            average = float(enrollment.previous_average) if enrollment.previous_average is not None else -1.0
+            birth_ordinal = enrollment.student.date_of_birth.toordinal() if enrollment.student.date_of_birth else 0
+            return -average, -birth_ordinal, enrollment.pk
+
+        for key, grouped_students in students_by_group.items():
+            grouped_classes = classes_by_group.get(key, [])
+            level_name = grouped_students[0].level.name if grouped_students[0].level else "Niveau inconnu"
+            series_label = grouped_students[0].series or "sans série"
+            group_label = f"{level_name} — {series_label}"
+            if not grouped_classes:
+                warnings.append(f"{group_label} : aucune classe active correspondante pour {len(grouped_students)} élève(s).")
+                continue
+
+            additions = {school_class.pk: 0 for school_class in grouped_classes}
+            capacity = {
+                school_class.pk: max(0, school_class.maximum_capacity - school_class.effectif)
+                for school_class in grouped_classes
+            }
+            assignable_count = min(len(grouped_students), sum(capacity.values()))
+            for _ in range(assignable_count):
+                candidates = [
+                    school_class for school_class in grouped_classes
+                    if additions[school_class.pk] < capacity[school_class.pk]
+                ]
+                selected = min(candidates, key=lambda school_class: (
+                    school_class.effectif + additions[school_class.pk],
+                    (school_class.effectif + additions[school_class.pk]) / school_class.maximum_capacity,
+                    natural_class_key(school_class),
+                ))
+                additions[selected.pk] += 1
+
+            ranked_students = sorted(grouped_students, key=student_rank)
+            excellent_students = [
+                enrollment for enrollment in ranked_students
+                if enrollment.previous_average is not None and enrollment.previous_average >= 16
+            ]
+            allocated_ids = set()
+            class_allocations = {school_class.pk: [] for school_class in grouped_classes}
+            reserve_rounds = min(3, len(excellent_students) // len(grouped_classes))
+            excellent_index = 0
+            for _ in range(reserve_rounds):
+                for school_class in grouped_classes:
+                    if excellent_index >= len(excellent_students):
+                        break
+                    if len(class_allocations[school_class.pk]) >= additions[school_class.pk]:
+                        continue
+                    enrollment = excellent_students[excellent_index]
+                    excellent_index += 1
+                    class_allocations[school_class.pk].append(enrollment)
+                    allocated_ids.add(enrollment.pk)
+
+            remaining_students = [enrollment for enrollment in ranked_students if enrollment.pk not in allocated_ids]
+            remaining_index = 0
+            for school_class in grouped_classes:
+                remaining_places = additions[school_class.pk] - len(class_allocations[school_class.pk])
+                selected_students = remaining_students[remaining_index:remaining_index + remaining_places]
+                class_allocations[school_class.pk].extend(selected_students)
+                remaining_index += len(selected_students)
+
+            assigned_in_group = 0
+            for school_class in grouped_classes:
+                for enrollment in class_allocations[school_class.pk]:
+                    enrollment.school_class = school_class
+                    assignments.append(enrollment)
+                    assigned_in_group += 1
+            summary.append({
+                "group": group_label,
+                "assigned": assigned_in_group,
+                "classes": [
+                    {
+                        "id": school_class.pk,
+                        "name": school_class.name,
+                        "added": len(class_allocations[school_class.pk]),
+                        "total": school_class.effectif + len(class_allocations[school_class.pk]),
+                        "capacity": school_class.maximum_capacity,
+                    }
+                    for school_class in grouped_classes
+                ],
+            })
+            if assigned_in_group < len(grouped_students):
+                warnings.append(
+                    f"{group_label} : capacité insuffisante, {len(grouped_students) - assigned_in_group} élève(s) restent sans classe."
+                )
+
+        with transaction.atomic():
+            StudentEnrollment.objects.bulk_update(assignments, ["school_class"])
+
+        return Response({
+            "message": f"{len(assignments)} élève(s) réparti(s) automatiquement.",
+            "assigned": len(assignments),
+            "remaining": len(students) - len(assignments),
+            "warnings": warnings,
+            "summary": summary,
+        })
 
     @action(detail=False, methods=["post"], url_path="import", parser_classes=[MultiPartParser, FormParser])
     def import_file(self, request, school_pk=None):
@@ -659,8 +1282,16 @@ class StudentEnrollmentViewSet(SchoolScopedMixin, viewsets.ModelViewSet):
             "matricule": "enrollment_number", "numero_matricule": "enrollment_number",
             "nom": "last_name", "prenoms": "first_names", "prénoms": "first_names",
             "genre": "gender", "date_naissance": "date_of_birth", "date_de_naissance": "date_of_birth",
-            "niveau": "level", "classe": "school_class", "nom_classe": "school_class", "nom_de_la_classe": "school_class",
-            "adresse": "address",
+            "cycle": "cycle", "niveau": "level", "serie": "series", "série": "series", "statut": "student_status", "status": "student_status", "classe": "school_class", "nom_classe": "school_class", "nom_de_la_classe": "school_class",
+            "allergie": "health_information", "allergies": "health_information",
+            "souci_de_sante": "health_information", "soucis_de_sante": "health_information", "probleme_de_sante": "health_information",
+            "informations_de_sante": "health_information", "allergies_et_soucis_de_sante": "health_information",
+            "moyenne": "previous_average", "moyenne_precedente": "previous_average",
+            "moyenne_annee_ecoulee": "previous_average", "moyenne_scolaire": "previous_average",
+            "moyenne_scolaire_de_l_annee_ecoulee": "previous_average",
+            "telephone_tuteur": "guardian_phone", "numero_tuteur": "guardian_phone",
+            "nom_tuteur": "guardian_last_name", "prenom_tuteur": "guardian_first_names",
+            "prenoms_tuteur": "guardian_first_names", "profession_tuteur": "guardian_profession",
         }
         normalized_rows = []
         errors = []
@@ -671,10 +1302,17 @@ class StudentEnrollmentViewSet(SchoolScopedMixin, viewsets.ModelViewSet):
             row = {aliases.get(slugify(str(key)).replace("-", "_"), slugify(str(key)).replace("-", "_")): value for key, value in source_row.items()}
             level_name = str(row.get("level") or "").strip()
             level = SchoolLevel.objects.filter(school=school, name__iexact=level_name, is_active=True).first()
+            cycle_value = slugify(str(row.get("cycle") or "").strip())
+            cycle_map = {"primaire": SchoolLevel.Stage.PRIMARY, "college": SchoolLevel.Stage.MIDDLE, "lycee": SchoolLevel.Stage.HIGH}
+            selected_cycle = cycle_map.get(cycle_value)
             class_name = str(row.get("school_class") or "").strip()
             school_class = SchoolClass.objects.filter(
                 school=school, academic_year=academic_year, group__iexact=class_name, is_active=True,
             ).first() if class_name else None
+            series = str(row.get("series") or "").strip()
+            student_status = slugify(str(row.get("student_status") or "nouveau").strip()) or "nouveau"
+            if not series and school_class:
+                series = school_class.series
             number = str(row.get("enrollment_number") or "").strip().upper().replace(" ", "")
             if not number:
                 while True:
@@ -693,36 +1331,46 @@ class StudentEnrollmentViewSet(SchoolScopedMixin, viewsets.ModelViewSet):
                 "first_names": str(row.get("first_names") or "").strip(),
                 "gender": gender,
                 "date_of_birth": str(birth_date or "").strip(),
-                "address": str(row.get("address") or "").strip(),
+                "health_information": str(row.get("health_information") or "").strip(),
                 "level": level.pk if level else None,
+                "series": series,
+                "student_status": student_status,
+                "previous_average": str(row.get("previous_average") or "").strip().replace(",", ".") or None,
+                "guardian_phone": str(row.get("guardian_phone") or "").strip(),
+                "guardian_last_name": str(row.get("guardian_last_name") or "").strip(),
+                "guardian_first_names": str(row.get("guardian_first_names") or "").strip(),
+                "guardian_profession": str(row.get("guardian_profession") or "").strip(),
                 "school_class": school_class.pk if school_class else None,
             }
+            import_rule_errors = {}
+            if not selected_cycle:
+                import_rule_errors["cycle"] = ["Cycle obligatoire ou invalide. Choix : Primaire, Collège ou Lycée."]
+            elif level and level.stage != selected_cycle:
+                import_rule_errors["cycle"] = [f"Le niveau « {level_name} » appartient au cycle {level.get_stage_display()}, pas au cycle indiqué."]
+            if selected_cycle in (SchoolLevel.Stage.PRIMARY, SchoolLevel.Stage.MIDDLE) and series:
+                import_rule_errors["serie"] = [f"Le cycle {'Primaire' if selected_cycle == SchoolLevel.Stage.PRIMARY else 'Collège'} ne doit pas avoir de série."]
             if number.casefold() in seen_numbers:
                 errors.append({"ligne": index, "erreurs": {"matricule": ["Matricule répété dans le fichier."]}})
                 continue
             seen_numbers.add(number.casefold())
             serializer = self.get_serializer(data=payload)
             if serializer.is_valid():
-                row_errors = {}
-                if not class_name:
-                    row_errors["classe"] = ["La classe est obligatoire pour assigner l’élève."]
-                elif not school_class:
+                row_errors = dict(import_rule_errors)
+                if class_name and not school_class:
                     row_errors["classe"] = [f"La classe « {class_name} » n’existe pas dans cette école pour l’année {academic_year.name}. Vérifiez son nom exact."]
-                elif level and school_class.level_id != level.id:
+                elif school_class and level and school_class.level_id != level.id:
                     row_errors["classe"] = [f"La classe « {class_name} » appartient au niveau {school_class.level.name}, pas au niveau {level_name}."]
                 if row_errors:
                     errors.append({"ligne": index, "erreurs": row_errors})
                 else:
                     normalized_rows.append(serializer)
             else:
-                row_errors = dict(serializer.errors)
+                row_errors = {**dict(serializer.errors), **import_rule_errors}
                 if not level:
                     row_errors["niveau"] = [f"Niveau « {level_name} » introuvable dans cette école."]
-                if not class_name:
-                    row_errors["classe"] = ["La classe est obligatoire pour assigner l’élève."]
-                elif not school_class:
+                if class_name and not school_class:
                     row_errors["classe"] = [f"La classe « {class_name} » n’existe pas dans cette école pour l’année {academic_year.name}. Vérifiez son nom exact."]
-                elif level and school_class.level_id != level.id:
+                elif school_class and level and school_class.level_id != level.id:
                     row_errors["classe"] = [f"La classe « {class_name} » appartient au niveau {school_class.level.name}, pas au niveau {level_name}."]
                 errors.append({"ligne": index, "erreurs": row_errors})
 
@@ -779,7 +1427,10 @@ class SchoolClassViewSet(SchoolScopedMixin, viewsets.ModelViewSet):
             raise serializers.ValidationError({"academic_year": "Sélectionnez une année académique valide."})
 
     def get_queryset(self):
-        return SchoolClass.objects.filter(school=self.get_school(), academic_year=self.get_academic_year(), is_active=True).annotate(
+        queryset = SchoolClass.objects.filter(school=self.get_school(), academic_year=self.get_academic_year())
+        if self.request.query_params.get("include_inactive", "").lower() not in {"1", "true", "yes"}:
+            queryset = queryset.filter(is_active=True)
+        return queryset.annotate(
             effectif=Count("student_enrollments", filter=Q(student_enrollments__status=StudentEnrollment.Status.ACTIVE), distinct=True),
         ).select_related("level", "academic_year", "homeroom_teacher").prefetch_related("subject_configurations__subject")
 

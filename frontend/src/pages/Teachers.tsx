@@ -23,9 +23,7 @@ const fullName = (teacher: Teacher) => `${teacher.last_name} ${teacher.first_nam
 const initials = (teacher: Teacher) =>
   `${teacher.last_name[0] ?? ""}${teacher.first_names[0] ?? ""}`.toUpperCase();
 const subjects = (teacher: Teacher) =>
-  [teacher.primary_subject_name, teacher.secondary_subject_name, teacher.tertiary_subject_name]
-    .filter(Boolean)
-    .join(", ") || "Aucune";
+  teacher.subject_names.map((name) => name === teacher.primary_subject_name ? `${name} (principale)` : name).join(", ") || "Aucune";
 
 export default function Teachers() {
   const navigate = useNavigate();
@@ -89,8 +87,7 @@ export default function Teachers() {
     try {
       const [classes, data] = await Promise.all([listClasses(schoolId ?? ""), getTeacherAssignments(teacher.id)]);
       setSchoolClasses(classes);
-      const teacherSubjectIds = [teacher.primary_subject, teacher.secondary_subject, teacher.tertiary_subject]
-        .filter((id): id is number => typeof id === "number");
+      const teacherSubjectIds = teacher.subjects ?? [];
       setClassAssignments(Object.fromEntries(data.assignments.map((item) => [
         item.class_id, item.subject_ids.filter((subjectId) => teacherSubjectIds.includes(subjectId)),
       ])));
@@ -226,7 +223,7 @@ export default function Teachers() {
         <p className="assignment-hours">Volume sélectionné : <strong>{assignedWeeklyHours} h/semaine</strong></p>
         <div className="teacher-class-assignment-list">{schoolClasses.map((schoolClass) => {
           const selected = Boolean(classAssignments[schoolClass.id]);
-          const teacherSubjectIds = [assignmentTeacher.primary_subject, assignmentTeacher.secondary_subject, assignmentTeacher.tertiary_subject].filter((id): id is number => typeof id === "number");
+          const teacherSubjectIds = assignmentTeacher.subjects ?? [];
           const teachableSubjects = schoolClass.subjects.filter((config) => teacherSubjectIds.includes(config.subject));
           return <div className="teacher-class-assignment" key={schoolClass.id}>
             <label className="teacher-school-option"><input type="checkbox" checked={selected} onChange={() => toggleAssignedClass(schoolClass.id)}/><strong>{schoolClass.name}</strong></label>

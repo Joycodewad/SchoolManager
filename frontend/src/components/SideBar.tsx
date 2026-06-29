@@ -64,6 +64,15 @@ const MENU = [
     ),
   },
   {
+    path: "/students/unassigned",
+    label: "Élèves sans classe",
+    icon: (
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+        <circle cx="9" cy="7" r="4"/><path d="M3 21v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2"/><path d="M17 8h5M19.5 5.5v5"/>
+      </svg>
+    ),
+  },
+  {
     path: "/enrollments",
     label: "Inscriptions",
     icon: (
@@ -85,6 +94,16 @@ const MENU = [
     ),
   },
   {
+    path: "/grades",
+    label: "Notes",
+    restrictedRoles: ["enseignant", "proprietaire", "admin", "censeur", "proviseur"],
+    icon: (
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+        <path d="M4 3h16v18H4z"/><path d="M8 7h8M8 11h8M8 15h4"/><path d="m15 16 2 2 4-5"/>
+      </svg>
+    ),
+  },
+  {
     label: "Finance",
     icon: (
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
@@ -95,6 +114,7 @@ const MENU = [
     ),
     children: [
       { path: "/finance/fees",     label: "Collecte des frais" },
+      { path: "/finance/tuition-settings", label: "Configuration de l’écolage", restrictedRoles: ["proprietaire", "censeur", "proviseur"] },
       { path: "/finance/expenses", label: "Dépenses scolaires" },
     ],
   },
@@ -223,6 +243,7 @@ export default function Sidebar() {
             </NavLink>
           )}
           {MENU.map((item) => {
+            if ("restrictedRoles" in item && item.restrictedRoles && !user?.is_superuser && !item.restrictedRoles.includes(activeSchool?.user_role ?? user?.role ?? "")) return null;
             if (item.children) {
               return (
                 <div key={item.label}>
@@ -242,7 +263,7 @@ export default function Sidebar() {
                   </button>
                   {financeOpen && (
                     <div className="nav-submenu">
-                      {item.children.map(child => (
+                      {item.children.filter(child => !child.restrictedRoles || user?.is_superuser || child.restrictedRoles.includes(activeSchool?.user_role ?? user?.role ?? "")).map(child => (
                         <NavLink
                           key={child.path}
                           to={scopedPath(child.path)}
