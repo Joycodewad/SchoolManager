@@ -6,7 +6,7 @@ from django.db import transaction
 from django.db.models import Sum
 from django.utils.text import slugify
 
-from .models import AcademicSession, AcademicYear, AttendanceRecord, AttendanceSession, ClassFeeItem, ClassSubject, CustomUser, DisciplineRecord, ExpenseCategory, FeeInstallment, FeeModule, FeePayment, GradeGroup, GradeLine, GradeScheme, School, SchoolClass, SchoolExpense, SchoolLevel, SchoolMembership, StudentEnrollment, Subject, SubjectCategory, TeacherClassAssignment, TeacherUnavailability, TuitionFeePlan
+from .models import AcademicSession, AcademicYear, Announcement, AttendanceRecord, AttendanceSession, ClassFeeItem, Conversation, Message, MessageAttachment, ClassSubject, CustomUser, DisciplineRecord, ExpenseCategory, FeeInstallment, FeeModule, FeePayment, GradeGroup, GradeLine, GradeScheme, School, SchoolClass, SchoolExpense, SchoolLevel, SchoolMembership, StudentEnrollment, Subject, SubjectCategory, TeacherClassAssignment, TeacherUnavailability, TuitionFeePlan
 
 
 def normalize_togolese_phone(value):
@@ -1078,3 +1078,146 @@ class SchoolClassSerializer(serializers.ModelSerializer):
                     for config in subject_configs
                 ])
         return instance
+
+
+class AnnouncementSerializer(serializers.ModelSerializer):
+    author_name = serializers.CharField(source="author.get_full_name", read_only=True)
+    author_role = serializers.CharField(source="author.get_role_display", read_only=True)
+    audience_label = serializers.CharField(source="get_audience_display", read_only=True)
+    priority_label = serializers.CharField(source="get_priority_display", read_only=True)
+    class_names = serializers.SerializerMethodField()
+    is_read = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Announcement
+        fields = [
+            "id", "title", "body", "audience", "audience_label", "roles",
+            "classes", "class_names", "priority", "priority_label",
+            "is_published", "published_at", "expires_on",
+            "author_name", "author_role", "is_read", "created_at",
+        ]
+        read_only_fields = [
+            "id", "author_name", "author_role", "audience_label",
+            "priority_label", "class_names", "is_read", "created_at",
+        ]
+
+    def get_class_names(self, instance):
+        return [item.group for item in instance.classes.all()]
+
+    def get_is_read(self, instance):
+        # `read_ids` est passé par la vue, qui charge les lectures en une fois
+        # plutôt qu'une requête par annonce.
+        return instance.id in self.context.get("read_ids", set())
+
+    def validate(self, attrs):
+        audience = attrs.get(
+            "audience", getattr(self.instance, "audience", Announcement.Audience.EVERYONE)
+        )
+        roles = attrs.get("roles", getattr(self.instance, "roles", []))
+        if audience == Announcement.Audience.ROLES:
+            known = dict(CustomUser.Role.choices)
+            cleaned = [str(role) for role in roles if str(role) in known]
+            if not cleaned:
+                raise serializers.ValidationError(
+                    {"roles": "Choisissez au moins un rôle valide."}
+                )
+            attrs["roles"] = cleaned
+        else:
+            # Hors ciblage par rôle, la liste n'a pas de sens : on la vide pour
+            # qu'un changement de destinataires ne laisse pas de reliquat.
+            attrs["roles"] = []
+        attrs["title"] = " ".join(str(attrs.get("title", "")).split()) or attrs.get("title", "")
+        return attrs
+
+
+class MessageAttachmentSerializer(serializers.ModelSerializer):
+    url = serializers.SerializerMethodField()
+    kind_label = serializers.CharField(source="get_kind_display", read_only=True)
+
+    class Meta:
+        model = MessageAttachment
+        fields = [
+            "id", "url", "kind", "kind_label", "original_name",
+            "content_type", "size", "duration_seconds",
+        ]
+        read_only_fields = fields
+
+    def get_url(self, instance):
+        if not instance.file:
+            return None
+        request = self.context.get("request")
+        # Adresse absolue : le mobile n'a pas de page d'origine d'où résoudre
+        # un chemin relatif.
+        return (
+            request.build_absolute_uri(instance.file.url)
+            if request else instance.file.url
+        )
+
+
+class MessageSerializer(serializers.ModelSerializer):
+    sender_name = serializers.CharField(source="sender.get_full_name", read_only=True)
+    sender_id = serializers.IntegerField(source="sender.id", read_only=True)
+    attachments = MessageAttachmentSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Message
+        fields = [
+            "id", "body", "sent_at", "sender_id", "sender_name", "attachments",
+        ]
+        read_only_fields = fields
+
+
+class ConversationSerializer(serializers.ModelSerializer):
+    participants_detail = serializers.SerializerMethodField()
+    last_message = serializers.SerializerMethodField()
+    unread_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Conversation
+        fields = [
+            "id", "subject", "participants_detail", "last_message",
+            "unread_count", "last_message_at", "created_at",
+        ]
+        read_only_fields = fields
+
+    def get_participants_detail(self, instance):
+        # L'utilisateur courant est retiré : un fil se nomme par ses autres
+        # participants, pas par soi-même.
+        me = self.context.get("user_id")
+        return [
+            {
+                "id": person.id,
+                "name": person.get_full_name(),
+                "role": person.get_role_display(),
+            }
+            for person in instance.participants.all()
+            if person.id != me
+        ]
+
+    def get_last_message(self, instance):
+        message = instance.messages.order_by("-sent_at", "-id").first()
+        if message is None:
+            return None
+        preview = message.body[:160]
+        if not preview:
+            # Un message sans texte n'est pas vide : il porte une pièce jointe.
+            # L'aperçu doit le dire, sinon la liste montrerait une ligne blanche.
+            attachment = message.attachments.first()
+            preview = {
+                MessageAttachment.Kind.IMAGE: "📷 Photo",
+                MessageAttachment.Kind.VIDEO: "🎬 Vidéo",
+                MessageAttachment.Kind.AUDIO: "🎙 Message vocal",
+                MessageAttachment.Kind.DOCUMENT: "📎 Document",
+            }.get(attachment.kind, "📎 Pièce jointe") if attachment else ""
+        return {
+            "body": preview,
+            "sent_at": message.sent_at,
+            "sender_name": message.sender.get_full_name() if message.sender else "",
+        }
+
+    def get_unread_count(self, instance):
+        me = self.context.get("user_id")
+        if me is None:
+            return 0
+        # Ses propres messages ne comptent jamais comme non lus.
+        return instance.messages.exclude(sender_id=me).exclude(read_by__id=me).count()

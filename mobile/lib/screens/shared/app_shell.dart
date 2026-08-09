@@ -11,7 +11,9 @@ import '../finance/expenses_screen.dart';
 import '../finance/finance_screen.dart';
 import '../parent/children_screen.dart';
 import '../teacher/grades_screen.dart';
+import 'announcements_screen.dart';
 import 'home_screen.dart';
+import 'messages_screen.dart';
 import 'profile_screen.dart';
 import 'school_picker.dart';
 import 'students_screen.dart';
@@ -35,6 +37,10 @@ class _AppShellState extends State<AppShell> {
         return const GradesScreen();
       case 'attendance':
         return const AttendanceScreen();
+      case 'announcements':
+        return const AnnouncementsScreen();
+      case 'messages':
+        return const MessagesScreen();
       case 'discipline':
         return const DisciplineScreen();
       case 'finance':
@@ -77,12 +83,9 @@ class _AppShellState extends State<AppShell> {
       return const SchoolPickerScreen();
     }
 
-    final tabs = destinations.length <= maxBottomTabs
-        ? destinations
-        : destinations.take(maxBottomTabs - 1).toList();
-    final overflow = destinations.length <= maxBottomTabs
-        ? <AppDestination>[]
-        : destinations.skip(maxBottomTabs - 1).toList();
+    final split = splitDestinations(destinations);
+    final tabs = split.tabs;
+    final overflow = split.overflow;
 
     final selectedIndex = tabs.indexWhere((item) => item.id == _current);
 

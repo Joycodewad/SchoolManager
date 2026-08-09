@@ -26,7 +26,8 @@ class ReportCardsScreen extends StatefulWidget {
 class _ReportCardsScreenState extends State<ReportCardsScreen> {
   Future<List<GradeSession>>? _sessions;
   int? _loadedFor;
-  int _sessionIndex = 0;
+  /// Onglet choisi à la main ; tant qu'il est nul, la session en cours prime.
+  int? _sessionIndex;
   int? _classId;
   Future<Map<String, dynamic>>? _cards;
   bool _generating = false;
@@ -94,7 +95,10 @@ class _ReportCardsScreenState extends State<ReportCardsScreen> {
           message: 'Aucune session académique ouverte pour cette année.',
         ),
         builder: (context, sessions) {
-          final index = _sessionIndex.clamp(0, sessions.length - 1);
+          // Ouvre sur la session en cours tant qu'aucun onglet n'a été
+          // choisi ; le `clamp` protège d'un index devenu trop grand.
+          final index = _sessionIndex?.clamp(0, sessions.length - 1) ??
+              defaultSessionIndex(sessions);
           final current = sessions[index];
 
           return Column(

@@ -97,6 +97,45 @@ class ApiClient {
   Future<dynamic> delete(String path) =>
       _send(() => _http.delete(_uri(path), headers: _headers()));
 
+  /// Envoi multipart, pour les messages qui portent des fichiers.
+  ///
+  /// Une valeur de `fields` peut être une liste : elle est alors répétée sous
+  /// la même clé, ce que Django relit avec `getlist` — la seule façon de
+  /// transmettre plusieurs destinataires en multipart.
+  Future<dynamic> upload(
+    String path, {
+    Map<String, dynamic> fields = const {},
+    List<UploadFile> files = const [],
+  }) async {
+    final request = _RepeatableMultipartRequest('POST', _uri(path));
+    // Pas de Content-Type ici : `MultipartRequest` pose lui-même sa frontière.
+    request.headers.addAll(_headers()..remove('Content-Type'));
+
+    fields.forEach((key, value) {
+      if (value == null) return;
+      if (value is Iterable) {
+        for (final item in value) {
+          request.addRepeatedField(key, '$item');
+        }
+      } else {
+        request.fields[key] = '$value';
+      }
+    });
+
+    for (final file in files) {
+      request.files.add(await http.MultipartFile.fromPath(
+        file.field,
+        file.path,
+        filename: file.filename,
+      ));
+    }
+
+    return _send(() async {
+      final streamed = await request.send();
+      return http.Response.fromStream(streamed);
+    });
+  }
+
   Future<dynamic> _send(Future<http.Response> Function() request) async {
     http.Response response;
     try {
@@ -162,4 +201,28 @@ class ApiClient {
   }
 
   void dispose() => _http.close();
+}
+
+/// Fichier à joindre à un envoi multipart.
+class UploadFile {
+  UploadFile({required this.path, this.field = 'attachments', this.filename});
+
+  final String path;
+  final String field;
+  final String? filename;
+}
+
+/// `MultipartRequest` acceptant plusieurs valeurs sous une même clé.
+///
+/// `request.fields` est une `Map` : y écrire deux fois la même clé écrase la
+/// première valeur, alors que Django attend des champs répétés pour
+/// reconstituer une liste. On passe donc les valeurs multiples par la liste
+/// des parties, sous forme de parties texte sans nom de fichier — ce qu'un
+/// serveur relit exactement comme un champ de formulaire ordinaire.
+class _RepeatableMultipartRequest extends http.MultipartRequest {
+  _RepeatableMultipartRequest(super.method, super.url);
+
+  void addRepeatedField(String name, String value) {
+    files.add(http.MultipartFile.fromString(name, value));
+  }
 }

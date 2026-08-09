@@ -24,7 +24,9 @@ class GradesScreen extends StatefulWidget {
 class _GradesScreenState extends State<GradesScreen> {
   Future<List<GradeSession>>? _future;
   int? _loadedFor;
-  int _sessionIndex = 0;
+
+  /// Onglet choisi à la main ; tant qu'il est nul, la session en cours prime.
+  int? _sessionIndex;
 
   @override
   void didChangeDependencies() {
@@ -62,8 +64,11 @@ class _GradesScreenState extends State<GradesScreen> {
               'vous est confiée pour cette année.',
         ),
         builder: (context, sessions) {
-          // L'index mémorisé peut dépasser après un changement d'année.
-          final index = _sessionIndex.clamp(0, sessions.length - 1);
+          // Sans choix explicite, on ouvre sur la session en cours plutôt que
+          // sur la première de la liste. L'index mémorisé peut par ailleurs
+          // dépasser après un changement d'année, d'où le `clamp`.
+          final index = _sessionIndex?.clamp(0, sessions.length - 1) ??
+              defaultSessionIndex(sessions);
           final current = sessions[index];
 
           return Column(

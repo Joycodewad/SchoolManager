@@ -40,7 +40,12 @@ dependencies:
   provider: ^6.1.5+1
   flutter_localizations:
     sdk: flutter
-
+  file_picker: ^10.0.0
+  image_picker: ^1.2.3
+  record: ^7.1.1
+  audioplayers: ^6.8.1
+  open_filex: ^4.7.0
+  path_provider: ^2.1.6
 dev_dependencies:
   flutter_test:
     sdk: flutter

@@ -45,10 +45,26 @@ const List<AppDestination> allDestinations = [
   ),
   AppDestination(
     id: 'attendance',
-    label: 'Appel',
+    label: 'Présence',
     icon: Icons.how_to_reg_outlined,
     selectedIcon: Icons.how_to_reg,
     capability: Capability.takeAttendance,
+  ),
+  // Annonces et Messages passent avant Discipline : ce sont les écrans
+  // consultés tous les jours, et seuls les premiers tiennent dans la barre.
+  AppDestination(
+    id: 'announcements',
+    label: 'Annonces',
+    icon: Icons.campaign_outlined,
+    selectedIcon: Icons.campaign,
+    capability: Capability.announcements,
+  ),
+  AppDestination(
+    id: 'messages',
+    label: 'Messages',
+    icon: Icons.forum_outlined,
+    selectedIcon: Icons.forum,
+    capability: Capability.messages,
   ),
   AppDestination(
     id: 'discipline',
@@ -106,6 +122,8 @@ const List<AppDestination> allDestinations = [
     selectedIcon: Icons.family_restroom,
     capability: Capability.children,
   ),
+  // Le profil ferme la liste : réglages plutôt qu'écran de travail, il passe
+  // volontiers dans « Plus » quand la barre est pleine.
   AppDestination(
     id: 'profile',
     label: 'Profil',
@@ -122,7 +140,26 @@ List<AppDestination> destinationsFor(Set<Capability> capabilities) =>
             item.capability == null || capabilities.contains(item.capability))
         .toList();
 
-/// La barre du bas ne tient que quelques onglets ; au-delà, le reste passe
-/// dans un menu « Plus ». Cinq est la limite au-dessus de laquelle les
-/// libellés deviennent illisibles sur un téléphone étroit.
+/// Nombre de destinations nommées dans la barre du bas.
+///
+/// Cinq écrans plus l'onglet « Plus », soit six emplacements : c'est ce que
+/// tient un téléphone étroit sans que les libellés se tronquent.
 const int maxBottomTabs = 5;
+
+/// Découpe les destinations entre la barre et le menu « Plus ».
+///
+/// La barre garde toujours ses cinq premières destinations ; « Plus » vient
+/// s'ajouter à côté, sans en évincer une. Les écrans de travail sont donc
+/// en tête de `allDestinations`, et le profil — simple réglage — ferme la
+/// liste, ce qui l'envoie dans le menu dès que la barre est pleine.
+({List<AppDestination> tabs, List<AppDestination> overflow}) splitDestinations(
+  List<AppDestination> destinations,
+) {
+  if (destinations.length <= maxBottomTabs) {
+    return (tabs: destinations, overflow: const []);
+  }
+  return (
+    tabs: destinations.take(maxBottomTabs).toList(),
+    overflow: destinations.skip(maxBottomTabs).toList(),
+  );
+}

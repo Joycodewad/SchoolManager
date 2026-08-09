@@ -55,12 +55,25 @@ class _HomeScreenState extends State<HomeScreen> {
         data.slots = const [];
       }
     }
-    if (session.can(Capability.students)) {
+    // Les contextes de notes donnent d'un seul appel la session en cours et,
+    // pour un enseignant, ses seules classes — le serveur y filtre déjà sur
+    // les matières qui lui sont confiées.
+    if (session.can(Capability.viewGrades)) {
       try {
-        data.classCount =
+        data.sessions = await GradeService(session.client).contexts(schoolId);
+      } on ApiException {
+        data.sessions = const [];
+      }
+    }
+
+    // Sans accès aux notes (surveillant, comptable), le comptage retombe sur
+    // les classes de l'école : c'est bien leur périmètre à eux.
+    if (data.sessions.isEmpty && session.can(Capability.students)) {
+      try {
+        data.schoolClassCount =
             (await DirectoryService(session.client).classes(schoolId)).length;
       } on ApiException {
-        data.classCount = null;
+        data.schoolClassCount = null;
       }
     }
     return data;
@@ -124,7 +137,17 @@ class _HomeScreenState extends State<HomeScreen> {
 
 class _HomeData {
   List<TimetableSlot> slots = const [];
-  int? classCount;
+  List<GradeSession> sessions = const [];
+
+  /// Nombre de classes de l'école, pour les rôles sans accès aux notes.
+  int? schoolClassCount;
+
+  /// Session à mettre en avant, ou `null` hors période.
+  GradeSession? get session => currentSession(sessions);
+
+  /// Classes assignées à l'utilisateur sur la session en cours. Un enseignant
+  /// ne voit ici que les siennes : `grades/contexts/` les a déjà filtrées.
+  int? get assignedClassCount => sessions.isEmpty ? null : session?.classes.length;
 }
 
 class _Greeting extends StatelessWidget {
@@ -245,16 +268,26 @@ class _TodayBlock extends StatelessWidget {
     final showsTimetable = session.can(Capability.myTimetable) ||
         session.can(Capability.timetable);
 
+    // Un enseignant compte ses classes assignées, pas celles de l'école : les
+    // 23 classes de l'établissement ne lui disent rien de sa charge.
+    final assigned = data.assignedClassCount;
+    final classCount = assigned ?? data.schoolClassCount;
+    final classLabel = assigned != null ? 'Classes assignées' : 'Classes';
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        if (data.classCount != null)
+        if (data.sessions.isNotEmpty) ...[
+          _SessionBanner(session: data.session),
+          const SizedBox(height: 12),
+        ],
+        if (classCount != null)
           Row(
             children: [
               Expanded(
                 child: StatTile(
-                  label: 'Classes',
-                  value: '${data.classCount}',
+                  label: classLabel,
+                  value: '$classCount',
                   icon: Icons.meeting_room_outlined,
                 ),
               ),
@@ -317,6 +350,89 @@ class _TodayBlock extends StatelessWidget {
             ),
         ],
       ],
+    );
+  }
+}
+
+/// Session académique en cours.
+///
+/// Hors période — vacances, ou année pas encore ouverte — aucune session ne
+/// couvre la date du jour. On affiche alors la dernière session travaillée en
+/// le disant, plutôt que de la présenter à tort comme « en cours ».
+class _SessionBanner extends StatelessWidget {
+  const _SessionBanner({required this.session});
+
+  final GradeSession? session;
+
+  @override
+  Widget build(BuildContext context) {
+    final current = session;
+    if (current == null) return const SizedBox.shrink();
+
+    final live = current.isCurrent;
+    final color = live ? AppColors.success : AppColors.muted;
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(7),
+              decoration: BoxDecoration(
+                color: color.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Icon(
+                live ? Icons.play_circle_outline : Icons.history,
+                size: 17,
+                color: color,
+              ),
+            ),
+            const SizedBox(width: 11),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    live ? 'Session en cours' : 'Dernière session',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: color,
+                    ),
+                  ),
+                  const SizedBox(height: 1),
+                  Text(
+                    current.name,
+                    style: const TextStyle(
+                      fontSize: 14.5,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.navy,
+                    ),
+                  ),
+                  if (current.startDate.isNotEmpty &&
+                      current.endDate.isNotEmpty) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      'Du ${formatDate(current.startDate)} '
+                      'au ${formatDate(current.endDate)}',
+                      style: const TextStyle(
+                          fontSize: 11.5, color: AppColors.muted),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            if (!live)
+              const StatusPill(
+                label: 'Hors période',
+                color: AppColors.warning,
+                dense: true,
+              ),
+          ],
+        ),
+      ),
     );
   }
 }

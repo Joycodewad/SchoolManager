@@ -2,7 +2,7 @@ from rest_framework.routers import DefaultRouter
 
 from django.urls import path
 
-from .views import AcademicSessionDetailView, AcademicSessionListView, AcademicYearViewSet, AttendanceSessionListView, AttendanceSheetView, CustomUserViewSet, DisciplineRecordListView, EnrollmentNumberSuggestionView, ExpenseCategoryListView, GradeContextView, GradeSchemeView, GradeSheetView, LoginView, LogoutView, MyTimetableView, OwnerViewSet, ParentListView, ReportCardExportView, ReportCardGenerationView, ReportCardSettingsView, ReportCardView, RoleChoicesView, SchoolClassViewSet, SchoolExpenseDetailView, SchoolExpenseListView, SchoolLevelViewSet, SchoolViewSet, StudentEnrollmentViewSet, SubjectCategoryViewSet, SubjectViewSet, TeacherViewSet, TimetableExportView, TimetableSetupView, TimetableValidationView, TimetableView, TuitionComplianceView, TuitionFeePlanDetailView, TuitionFeePlanListView, TuitionPaymentListView, UsernameSuggestionView
+from .views import AcademicSessionDetailView, AcademicSessionListView, AcademicYearViewSet, AnnouncementDetailView, AnnouncementListView, AttendanceSessionListView, AttendanceSheetView, ConversationDetailView, ConversationListView, MessageRecipientsView, CustomUserViewSet, DisciplineRecordListView, EnrollmentNumberSuggestionView, ExpenseCategoryListView, GradeContextView, GradeSchemeView, GradeSheetView, LoginView, LogoutView, MyTimetableView, OwnerViewSet, ParentListView, ReportCardExportView, ReportCardGenerationView, ReportCardSettingsView, ReportCardView, RoleChoicesView, SchoolClassViewSet, SchoolExpenseDetailView, SchoolExpenseListView, SchoolLevelViewSet, SchoolViewSet, StudentEnrollmentViewSet, SubjectCategoryViewSet, SubjectViewSet, TeacherViewSet, TimetableExportView, TimetableSetupView, TimetableValidationView, TimetableView, TuitionComplianceView, TuitionFeePlanDetailView, TuitionFeePlanListView, TuitionPaymentListView, UsernameSuggestionView
 
 router = DefaultRouter()
 router.register("teachers", TeacherViewSet, basename="teacher")
@@ -118,6 +118,11 @@ urlpatterns = [
     path("schools/<int:school_pk>/discipline/records/", DisciplineRecordListView.as_view(), name="discipline-records"),
     path("schools/<int:school_pk>/attendance/sessions/", AttendanceSessionListView.as_view(), name="attendance-sessions"),
     path("schools/<int:school_pk>/attendance/sheet/", AttendanceSheetView.as_view(), name="attendance-sheet"),
+    path("schools/<int:school_pk>/announcements/", AnnouncementListView.as_view(), name="announcements"),
+    path("schools/<int:school_pk>/announcements/<int:pk>/", AnnouncementDetailView.as_view(), name="announcement-detail"),
+    path("schools/<int:school_pk>/conversations/", ConversationListView.as_view(), name="conversations"),
+    path("schools/<int:school_pk>/conversations/<int:pk>/", ConversationDetailView.as_view(), name="conversation-detail"),
+    path("schools/<int:school_pk>/conversations/recipients/", MessageRecipientsView.as_view(), name="message-recipients"),
     path("schools/<int:school_pk>/grades/contexts/", GradeContextView.as_view(), name="grade-contexts"),
     path("schools/<int:school_pk>/grades/sessions/<int:session_pk>/scheme/", GradeSchemeView.as_view(), name="grade-scheme"),
     path("schools/<int:school_pk>/grades/sessions/<int:session_pk>/subjects/<int:class_subject_pk>/", GradeSheetView.as_view(), name="grade-sheet"),

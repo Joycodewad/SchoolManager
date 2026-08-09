@@ -43,8 +43,12 @@ void main() {
       expect(surveillant, isNot(contains(Capability.finance)));
     });
 
-    test('le parent ne voit que ses enfants', () {
-      expect(capabilitiesFor(AppRole.parent), {Capability.children});
+    test('le parent suit ses enfants, lit les annonces et écrit', () {
+      expect(capabilitiesFor(AppRole.parent), {
+        Capability.children,
+        Capability.announcements,
+        Capability.messages,
+      });
     });
 
     test('le superutilisateur reçoit tout, quel que soit son rôle affiché', () {
@@ -88,11 +92,15 @@ void main() {
       expect(accountant, isNot(contains('grades')));
     });
 
-    test('le parent n’a que ses trois écrans', () {
+    test('le parent garde un périmètre restreint et sans gestion', () {
       final ids = destinationsFor(capabilitiesFor(AppRole.parent))
           .map((item) => item.id)
           .toList();
-      expect(ids, ['home', 'children', 'profile']);
+      expect(ids, ['home', 'announcements', 'messages', 'children', 'profile']);
+      // Rien de la gestion de l'établissement ne doit lui apparaître.
+      expect(ids, isNot(contains('grades')));
+      expect(ids, isNot(contains('finance')));
+      expect(ids, isNot(contains('students')));
     });
 
     test('aucune destination ne cite une capacité absente de la matrice', () {

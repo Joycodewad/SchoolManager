@@ -6,6 +6,7 @@ from django.db import models
 from django.db.models import F, Q
 from django.db.models.signals import post_save
 from django.dispatch import receiver
+from django.utils import timezone
 
 
 class CustomUser(AbstractUser):
@@ -1252,3 +1253,276 @@ class ReportCard(models.Model):
 
     def __str__(self):
         return f"Bulletin {self.enrollment.student.get_full_name()} — {self.session.name}"
+
+
+class Announcement(models.Model):
+    """Annonce diffusée par la direction.
+
+    Une annonce vise soit toute l'école, soit des rôles précis, soit des
+    classes précises — ce dernier cas touchant les enseignants de ces classes
+    et, plus tard, les parents de leurs élèves.
+    """
+
+    class Audience(models.TextChoices):
+        EVERYONE = "tous", "Tout l’établissement"
+        STAFF = "personnel", "Le personnel"
+        ROLES = "roles", "Certains rôles"
+        CLASSES = "classes", "Certaines classes"
+
+    class Priority(models.TextChoices):
+        NORMAL = "normale", "Normale"
+        IMPORTANT = "importante", "Importante"
+        URGENT = "urgente", "Urgente"
+
+    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name="announcements")
+    academic_year = models.ForeignKey(
+        AcademicYear, on_delete=models.CASCADE, related_name="announcements",
+    )
+    title = models.CharField("titre", max_length=180)
+    body = models.TextField("contenu")
+    audience = models.CharField(
+        "destinataires", max_length=12,
+        choices=Audience.choices, default=Audience.EVERYONE,
+    )
+    # Rempli seulement quand `audience` vaut « roles » : liste de valeurs de
+    # CustomUser.Role.
+    roles = models.JSONField("rôles visés", default=list, blank=True)
+    classes = models.ManyToManyField(
+        SchoolClass, blank=True, related_name="announcements",
+        verbose_name="classes visées",
+    )
+    priority = models.CharField(
+        "priorité", max_length=12,
+        choices=Priority.choices, default=Priority.NORMAL,
+    )
+    is_published = models.BooleanField(
+        "publiée", default=True,
+        help_text="Une annonce non publiée reste un brouillon, visible de son "
+                  "seul auteur.",
+    )
+    published_at = models.DateTimeField("publiée le", default=timezone.now)
+    # Au-delà de cette date l'annonce sort des listes : une information
+    # périmée qui traîne vaut moins que pas d'information du tout.
+    expires_on = models.DateField("expire le", null=True, blank=True)
+    author = models.ForeignKey(
+        CustomUser, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="announcements", verbose_name="auteur",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-published_at", "-id"]
+        verbose_name = "annonce"
+        verbose_name_plural = "annonces"
+
+    def __str__(self):
+        return self.title
+
+    def clean(self):
+        super().clean()
+        if self.audience == self.Audience.ROLES and not self.roles:
+            raise ValidationError({"roles": "Choisissez au moins un rôle."})
+
+
+class AnnouncementRead(models.Model):
+    """Accusé de lecture, pour distinguer le lu du non-lu."""
+
+    announcement = models.ForeignKey(
+        Announcement, on_delete=models.CASCADE, related_name="reads",
+    )
+    user = models.ForeignKey(
+        CustomUser, on_delete=models.CASCADE, related_name="announcement_reads",
+    )
+    read_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["announcement", "user"], name="unique_announcement_read",
+            ),
+        ]
+        verbose_name = "lecture d’annonce"
+        verbose_name_plural = "lectures d’annonces"
+
+    def __str__(self):
+        return f"{self.user} a lu « {self.announcement} »"
+
+
+class Conversation(models.Model):
+    """Fil de discussion entre membres d'une même école.
+
+    Le fil porte ses participants ; il n'y a pas de notion d'expéditeur au
+    niveau du fil, seulement au niveau de chaque message.
+    """
+
+    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name="conversations")
+    subject = models.CharField("objet", max_length=180, blank=True)
+    participants = models.ManyToManyField(
+        CustomUser, related_name="conversations", verbose_name="participants",
+    )
+    started_by = models.ForeignKey(
+        CustomUser, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="started_conversations",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    # Recopié à chaque message pour trier les fils sans agrégat coûteux.
+    last_message_at = models.DateTimeField("dernier message", default=timezone.now)
+
+    class Meta:
+        ordering = ["-last_message_at"]
+        verbose_name = "conversation"
+        verbose_name_plural = "conversations"
+
+    def __str__(self):
+        return self.subject or f"Conversation {self.pk}"
+
+
+class Message(models.Model):
+    """Message d'un fil."""
+
+    conversation = models.ForeignKey(
+        Conversation, on_delete=models.CASCADE, related_name="messages",
+    )
+    sender = models.ForeignKey(
+        CustomUser, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="sent_messages", verbose_name="expéditeur",
+    )
+    # Vide autorisé : un message peut n'être qu'une photo ou un vocal. La vue
+    # refuse en revanche un message sans texte *et* sans pièce jointe.
+    body = models.TextField("message", blank=True)
+    sent_at = models.DateTimeField(auto_now_add=True)
+    read_by = models.ManyToManyField(
+        CustomUser, blank=True, related_name="read_messages",
+        verbose_name="lu par",
+    )
+
+    class Meta:
+        ordering = ["sent_at", "id"]
+        verbose_name = "message"
+        verbose_name_plural = "messages"
+
+    def __str__(self):
+        return f"{self.sender} — {self.body[:40]}"
+
+
+def message_attachment_path(instance, filename):
+    """Range les pièces jointes par école et par mois.
+
+    Un dossier unique finirait par contenir des dizaines de milliers de
+    fichiers, ce qu'aucun système de fichiers n'aime.
+    """
+    school_id = instance.message.conversation.school_id
+    stamp = timezone.now()
+    return f"messages/{school_id}/{stamp:%Y-%m}/{filename}"
+
+
+class MessageAttachment(models.Model):
+    """Fichier joint à un message.
+
+    Le `kind` est déduit du type MIME à l'enregistrement : le mobile s'en sert
+    pour choisir l'affichage (vignette, lecteur audio, icône de document) sans
+    avoir à réinterpréter le MIME lui-même.
+    """
+
+    class Kind(models.TextChoices):
+        IMAGE = "image", "Image"
+        VIDEO = "video", "Vidéo"
+        AUDIO = "audio", "Message vocal"
+        DOCUMENT = "document", "Document"
+
+    # Types acceptés, par famille. Tout le reste est refusé : une messagerie
+    # scolaire n'a pas à véhiculer d'exécutables.
+    ALLOWED_TYPES = {
+        Kind.IMAGE: {
+            "image/jpeg", "image/png", "image/gif", "image/webp", "image/heic",
+        },
+        Kind.VIDEO: {
+            "video/mp4", "video/quicktime", "video/3gpp", "video/webm",
+            "video/x-matroska",
+        },
+        Kind.AUDIO: {
+            "audio/mpeg", "audio/mp4", "audio/aac", "audio/ogg", "audio/opus",
+            "audio/wav", "audio/x-wav", "audio/webm", "audio/3gpp", "audio/m4a",
+            "audio/x-m4a",
+        },
+        Kind.DOCUMENT: {
+            "application/pdf",
+            # Word, Excel — anciens formats et OpenXML.
+            "application/msword",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "application/vnd.ms-excel",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            # Certains clients envoient les .docx/.xlsx en flux binaire brut ;
+            # l'extension tranche alors, cf. `resolve_kind`.
+            "application/octet-stream",
+        },
+    }
+
+    # Extensions retenues quand le type MIME est trop vague pour décider.
+    DOCUMENT_EXTENSIONS = {".pdf", ".doc", ".docx", ".xls", ".xlsx", ".csv"}
+
+    # 25 Mio : de quoi passer une vidéo courte ou un PDF scanné, sans saturer
+    # un forfait mobile ni le disque du serveur.
+    MAX_SIZE = 25 * 1024 * 1024
+
+    message = models.ForeignKey(
+        Message, on_delete=models.CASCADE, related_name="attachments",
+    )
+    file = models.FileField("fichier", upload_to=message_attachment_path)
+    kind = models.CharField(
+        "type", max_length=10, choices=Kind.choices, default=Kind.DOCUMENT,
+    )
+    original_name = models.CharField("nom d’origine", max_length=255, blank=True)
+    content_type = models.CharField("type MIME", max_length=120, blank=True)
+    size = models.PositiveIntegerField("taille", default=0)
+    # Renseignée pour les vocaux et les vidéos : le mobile affiche la durée
+    # sans avoir à télécharger le fichier pour la mesurer.
+    duration_seconds = models.PositiveIntegerField(
+        "durée", null=True, blank=True,
+    )
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["id"]
+        verbose_name = "pièce jointe"
+        verbose_name_plural = "pièces jointes"
+
+    def __str__(self):
+        return self.original_name or f"Pièce jointe {self.pk}"
+
+    @classmethod
+    def resolve_kind(cls, content_type, filename=""):
+        """Famille du fichier, à partir du type MIME et, à défaut, du nom.
+
+        Retourne `None` quand le fichier n'est pas d'un type accepté.
+        """
+        mime = (content_type or "").split(";")[0].strip().lower()
+        extension = ""
+        if "." in filename:
+            extension = filename[filename.rfind("."):].lower()
+
+        # Un binaire générique ne dit rien du contenu : l'extension décide.
+        if mime in ("", "application/octet-stream"):
+            if extension in cls.DOCUMENT_EXTENSIONS:
+                return cls.Kind.DOCUMENT
+            return None
+
+        for kind, allowed in cls.ALLOWED_TYPES.items():
+            if mime in allowed:
+                # « octet-stream » n'est accepté que pour un document, jamais
+                # comme image ou vidéo dont le rendu dépend du vrai format.
+                if mime == "application/octet-stream" and kind != cls.Kind.DOCUMENT:
+                    continue
+                return kind
+
+        # Les familles génériques couvrent les variantes exotiques (image/avif,
+        # audio/flac…) que l'énumération ci-dessus ne liste pas.
+        for prefix, kind in (
+            ("image/", cls.Kind.IMAGE),
+            ("video/", cls.Kind.VIDEO),
+            ("audio/", cls.Kind.AUDIO),
+        ):
+            if mime.startswith(prefix):
+                return kind
+        return None

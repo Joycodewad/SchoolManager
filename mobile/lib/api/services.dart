@@ -1,3 +1,4 @@
+import '../models/communication.dart';
 import '../models/finance.dart';
 import '../models/school_data.dart';
 import '../models/session.dart';
@@ -292,4 +293,111 @@ class ReportCardService {
         '/schools/$schoolId/report-cards/sessions/$sessionId/generate/',
         body: payload,
       );
+}
+
+/// Annonces de l'établissement.
+class AnnouncementService {
+  AnnouncementService(this._client);
+
+  final ApiClient _client;
+
+  Future<({List<Announcement> items, int unread, bool canPublish})> list(
+      int schoolId) async {
+    final data = await _client.get('/schools/$schoolId/announcements/');
+    final map = (data as Map).cast<String, dynamic>();
+    return (
+      items: _rows(map['announcements']).map(Announcement.fromJson).toList(),
+      unread: asInt(map['unread_count']) ?? 0,
+      canPublish: map['can_publish'] == true,
+    );
+  }
+
+  Future<void> publish(int schoolId, Map<String, dynamic> payload) =>
+      _client.post('/schools/$schoolId/announcements/', body: payload);
+
+  /// Accusé de lecture. Rejouer l'appel est sans effet.
+  Future<void> markRead(int schoolId, int announcementId) =>
+      _client.post('/schools/$schoolId/announcements/$announcementId/');
+
+  Future<void> remove(int schoolId, int announcementId) =>
+      _client.delete('/schools/$schoolId/announcements/$announcementId/');
+}
+
+/// Messagerie interne.
+class MessageService {
+  MessageService(this._client);
+
+  final ApiClient _client;
+
+  Future<({List<Conversation> items, int unread})> conversations(
+      int schoolId) async {
+    final data = await _client.get('/schools/$schoolId/conversations/');
+    final map = (data as Map).cast<String, dynamic>();
+    return (
+      items: _rows(map['conversations']).map(Conversation.fromJson).toList(),
+      unread: asInt(map['unread_count']) ?? 0,
+    );
+  }
+
+  /// Ouvre le fil ; le serveur en profite pour marquer ses messages comme lus.
+  Future<ConversationThread> thread(int schoolId, int conversationId) async {
+    final data =
+        await _client.get('/schools/$schoolId/conversations/$conversationId/');
+    return ConversationThread.fromJson((data as Map).cast<String, dynamic>());
+  }
+
+  /// Répond dans un fil. Avec des fichiers, l'envoi passe en multipart —
+  /// le JSON ne sait pas transporter de binaire.
+  Future<void> reply(
+    int schoolId,
+    int conversationId,
+    String body, {
+    List<UploadFile> files = const [],
+    int? durationSeconds,
+  }) {
+    final path = '/schools/$schoolId/conversations/$conversationId/';
+    if (files.isEmpty) {
+      return _client.post(path, body: {'body': body});
+    }
+    return _client.upload(
+      path,
+      fields: {
+        'body': body,
+        'duration_seconds': ?durationSeconds,
+      },
+      files: files,
+    );
+  }
+
+  Future<void> start(
+    int schoolId, {
+    required List<int> participants,
+    required String body,
+    String subject = '',
+    List<UploadFile> files = const [],
+  }) {
+    final url = '/schools/$schoolId/conversations/';
+    if (files.isEmpty) {
+      return _client.post(url, body: {
+        'participants': participants,
+        'body': body,
+        'subject': subject,
+      });
+    }
+    return _client.upload(
+      url,
+      fields: {
+        'participants': participants,
+        'body': body,
+        'subject': subject,
+      },
+      files: files,
+    );
+  }
+
+  Future<List<Correspondent>> recipients(int schoolId) async {
+    final data =
+        await _client.get('/schools/$schoolId/conversations/recipients/');
+    return _rows(data, 'recipients').map(Correspondent.fromJson).toList();
+  }
 }

@@ -66,5 +66,11 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Le micro permet d’enregistrer des messages vocaux dans la messagerie de l’établissement.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>L’appareil photo permet de joindre une photo à un message.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>L’accès aux photos permet de joindre une image ou une vidéo à un message.</string>
 </dict>
 </plist>

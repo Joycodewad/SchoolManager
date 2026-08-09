@@ -17,6 +17,31 @@ ALLOWED_HOSTS = [
     if host.strip()
 ]
 
+# En développement, l'application mobile joint le serveur par une autre adresse
+# que « localhost » : 10.0.2.2 depuis l'émulateur Android (alias de la machine
+# hôte), et l'IP du poste sur le réseau local depuis un téléphone réel. Sans
+# ces entrées, Django refuse la requête avec « Invalid HTTP_HOST header ».
+#
+# Ouvert seulement quand DEBUG est actif : en production, la liste reste celle
+# de la configuration, et l'API doit de toute façon être servie en HTTPS.
+if DEBUG:
+    ALLOWED_HOSTS += [
+        host for host in ("10.0.2.2", "0.0.0.0") if host not in ALLOWED_HOSTS
+    ]
+    # Les IP privées du poste changent d'un réseau à l'autre : les découvrir
+    # évite d'éditer la configuration à chaque changement de Wi-Fi.
+    try:
+        import socket
+
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            address = info[4][0]
+            if address not in ALLOWED_HOSTS:
+                ALLOWED_HOSTS.append(address)
+    except OSError:
+        # Machine sans résolution de son propre nom : on s'en passe, les
+        # adresses fixes ci-dessus suffisent à l'émulateur.
+        pass
+
 INSTALLED_APPS = [
     "django.contrib.admin",
     "django.contrib.auth",

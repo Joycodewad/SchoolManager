@@ -84,6 +84,15 @@ enum Capability {
 
   /// Suivi de ses enfants (parent).
   children,
+
+  /// Lire les annonces de l'établissement.
+  announcements,
+
+  /// Publier une annonce.
+  publishAnnouncements,
+
+  /// Messagerie interne.
+  messages,
 }
 
 /// Capacités par rôle, telles que le backend les autorise aujourd'hui.
@@ -93,6 +102,9 @@ enum Capability {
 /// et la discipline. C'est ce qui permet de réutiliser les mêmes écrans.
 const Map<AppRole, Set<Capability>> roleCapabilities = {
   AppRole.owner: {
+    Capability.announcements,
+    Capability.publishAnnouncements,
+    Capability.messages,
     Capability.dashboard,
     Capability.viewGrades,
     Capability.enterGrades,
@@ -110,6 +122,9 @@ const Map<AppRole, Set<Capability>> roleCapabilities = {
     Capability.timetable,
   },
   AppRole.proviseur: {
+    Capability.announcements,
+    Capability.publishAnnouncements,
+    Capability.messages,
     Capability.dashboard,
     Capability.viewGrades,
     Capability.enterGrades,
@@ -127,6 +142,9 @@ const Map<AppRole, Set<Capability>> roleCapabilities = {
     Capability.timetable,
   },
   AppRole.censeur: {
+    Capability.announcements,
+    Capability.publishAnnouncements,
+    Capability.messages,
     Capability.dashboard,
     Capability.viewGrades,
     Capability.enterGrades,
@@ -144,6 +162,9 @@ const Map<AppRole, Set<Capability>> roleCapabilities = {
     Capability.timetable,
   },
   AppRole.admin: {
+    Capability.announcements,
+    Capability.publishAnnouncements,
+    Capability.messages,
     Capability.dashboard,
     Capability.viewGrades,
     Capability.enterGrades,
@@ -160,6 +181,8 @@ const Map<AppRole, Set<Capability>> roleCapabilities = {
     Capability.timetable,
   },
   AppRole.teacher: {
+    Capability.announcements,
+    Capability.messages,
     Capability.viewGrades,
     Capability.enterGrades,
     Capability.takeAttendance,
@@ -169,12 +192,16 @@ const Map<AppRole, Set<Capability>> roleCapabilities = {
     Capability.myTimetable,
   },
   AppRole.accountant: {
+    Capability.announcements,
+    Capability.messages,
     Capability.dashboard,
     Capability.finance,
     Capability.expenses,
     Capability.students,
   },
   AppRole.surveillant: {
+    Capability.announcements,
+    Capability.messages,
     Capability.takeAttendance,
     Capability.superviseAttendance,
     Capability.viewDiscipline,
@@ -183,6 +210,8 @@ const Map<AppRole, Set<Capability>> roleCapabilities = {
     Capability.timetable,
   },
   AppRole.secretary: {
+    Capability.announcements,
+    Capability.messages,
     Capability.takeAttendance,
     Capability.superviseAttendance,
     Capability.viewDiscipline,
@@ -192,12 +221,17 @@ const Map<AppRole, Set<Capability>> roleCapabilities = {
   },
   AppRole.parent: {
     Capability.children,
+    Capability.announcements,
+    Capability.messages,
   },
   AppRole.student: {
     Capability.myTimetable,
   },
   AppRole.staff: {},
   AppRole.superuser: {
+    Capability.announcements,
+    Capability.publishAnnouncements,
+    Capability.messages,
     Capability.dashboard,
     Capability.viewGrades,
     Capability.enterGrades,

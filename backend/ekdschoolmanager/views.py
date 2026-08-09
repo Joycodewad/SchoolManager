@@ -21,7 +21,7 @@ from rest_framework.permissions import AllowAny, BasePermission
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .models import ReportCard, ReportCardAppreciation, ReportCardSettings, SubjectCategoryOrder, AcademicSession, AcademicYear, AttendanceRecord, AttendanceSession, ClassFeeItem, ClassSubject, CustomUser, DisciplineRecord, ExpenseCategory, FeeInstallment, FeePayment, GradeEntry, GradeScheme, School, SchoolClass, SchoolExpense, SchoolLevel, SchoolMembership, StudentEnrollment, ClassGroupSession, ExcludedTimetableClass, Subject, SubjectCategory, SubjectPeriodRestriction, TeacherAssignmentSubject, TeacherClassAssignment, TeacherUnavailability, Timetable, TimetablePeriod, TuitionFeePlan
+from .models import ReportCard, ReportCardAppreciation, ReportCardSettings, SubjectCategoryOrder, AcademicSession, AcademicYear, Announcement, AnnouncementRead, AttendanceRecord, AttendanceSession, ClassFeeItem, Conversation, Message, MessageAttachment, ClassSubject, CustomUser, DisciplineRecord, ExpenseCategory, FeeInstallment, FeePayment, GradeEntry, GradeScheme, School, SchoolClass, SchoolExpense, SchoolLevel, SchoolMembership, StudentEnrollment, ClassGroupSession, ExcludedTimetableClass, Subject, SubjectCategory, SubjectPeriodRestriction, TeacherAssignmentSubject, TeacherClassAssignment, TeacherUnavailability, Timetable, TimetablePeriod, TuitionFeePlan
 from .timetable import DAY_LABELS, create_default_periods, describe_unplaced, irreducible_deficit, regenerate
 from .timetable_pdf import class_timetables_pdf, teacher_timetables_pdf
 from .reportcards import (
@@ -29,7 +29,7 @@ from .reportcards import (
     student_history, term_history,
 )
 from .reportcard_pdf import report_cards_pdf
-from .serializers import AcademicSessionSerializer, AcademicYearSerializer, AttendanceSessionSerializer, CustomUserSerializer, DisciplineRecordSerializer, ExpenseCategorySerializer, FeePaymentSerializer, GradeSchemeSerializer, SchoolClassSerializer, SchoolExpenseSerializer, SchoolLevelSerializer, SchoolMembershipSerializer, SchoolSerializer, StudentEnrollmentSerializer, SubjectCategorySerializer, SubjectSerializer, TuitionFeePlanSerializer, normalize_togolese_phone
+from .serializers import AcademicSessionSerializer, AcademicYearSerializer, AnnouncementSerializer, AttendanceSessionSerializer, ConversationSerializer, MessageSerializer, CustomUserSerializer, DisciplineRecordSerializer, ExpenseCategorySerializer, FeePaymentSerializer, GradeSchemeSerializer, SchoolClassSerializer, SchoolExpenseSerializer, SchoolLevelSerializer, SchoolMembershipSerializer, SchoolSerializer, StudentEnrollmentSerializer, SubjectCategorySerializer, SubjectSerializer, TuitionFeePlanSerializer, normalize_togolese_phone
 
 
 XLSX_NS = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
@@ -846,6 +846,7 @@ class GradeContextView(GradeMixin, APIView):
     def get(self, request, school_pk):
         self.ensure_grade_access()
         year = self.get_academic_year()
+        today = timezone.localdate()
         sessions = AcademicSession.objects.filter(academic_year=year, is_active=True, is_closed=False).prefetch_related("classes__level", "classes__subject_configurations__subject")
         result = []
         for session in sessions:
@@ -859,7 +860,16 @@ class GradeContextView(GradeMixin, APIView):
                         "subjects": [{"id": config.id, "name": config.subject.name} for config in subjects],
                     })
             if classes:
-                result.append({"id": session.id, "name": session.name, "label": session.label, "classes": classes})
+                result.append({
+                    "id": session.id, "name": session.name, "label": session.label,
+                    # Les dates permettent de désigner la session en cours ;
+                    # sans elles, un client ne peut que deviner laquelle
+                    # afficher quand plusieurs sessions sont actives.
+                    "start_date": session.start_date,
+                    "end_date": session.end_date,
+                    "is_current": session.start_date <= today <= session.end_date,
+                    "classes": classes,
+                })
         return Response({"can_configure": self.can_configure_grades(), "sessions": result})
 
 
@@ -2930,3 +2940,405 @@ class ReportCardExportView(GradeMixin, APIView):
         response = HttpResponse(content, content_type="application/pdf")
         response["Content-Disposition"] = f'attachment; filename="bulletins-{slugify(label)}.pdf"'
         return response
+
+
+def save_attachments(message, files):
+    """Attache les fichiers reçus à un message, après contrôle.
+
+    Refuse plutôt qu'ignorer : un fichier trop lourd ou d'un type non prévu
+    doit se voir signalé à l'expéditeur, pas disparaître en silence.
+    """
+    saved = []
+    for upload in files:
+        if upload.size > MessageAttachment.MAX_SIZE:
+            limit = MessageAttachment.MAX_SIZE // (1024 * 1024)
+            raise serializers.ValidationError(
+                {"attachments": f"« {upload.name} » dépasse {limit} Mo."}
+            )
+        kind = MessageAttachment.resolve_kind(
+            getattr(upload, "content_type", ""), upload.name,
+        )
+        if kind is None:
+            raise serializers.ValidationError(
+                {"attachments": f"Type de fichier non autorisé : « {upload.name} »."}
+            )
+        saved.append(MessageAttachment.objects.create(
+            message=message,
+            file=upload,
+            kind=kind,
+            original_name=upload.name[:255],
+            content_type=(getattr(upload, "content_type", "") or "")[:120],
+            size=upload.size,
+        ))
+    return saved
+
+
+def attachment_duration(request):
+    """Durée déclarée par le client pour un vocal ou une vidéo, si fournie."""
+    raw = request.data.get("duration_seconds")
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if 0 < value < 60 * 60 * 6 else None
+
+
+class CommunicationMixin(SchoolScopedMixin):
+    """Périmètre commun aux annonces et à la messagerie."""
+
+    # Rôles qui pilotent l'établissement : eux seuls publient une annonce.
+    DIRECTION_ROLES = [
+        CustomUser.Role.OWNER, CustomUser.Role.ADMIN,
+        CustomUser.Role.CENSEUR, CustomUser.Role.PROVISEUR,
+    ]
+
+    def get_academic_year(self):
+        year_id = self.request.headers.get("X-Academic-Year-ID")
+        if not year_id:
+            raise serializers.ValidationError({"academic_year": "Sélectionnez une année académique."})
+        try:
+            return AcademicYear.objects.get(pk=year_id, school=self.get_school())
+        except (AcademicYear.DoesNotExist, ValueError):
+            raise serializers.ValidationError({"academic_year": "Année académique invalide."})
+
+    def membership_role(self):
+        """Rôle tenu dans cette école, à défaut le rôle du compte."""
+        school = self.get_school()
+        if school.owner_id == self.request.user.id:
+            return CustomUser.Role.OWNER
+        membership = school.memberships.filter(
+            user=self.request.user, is_active=True,
+        ).first()
+        return membership.role if membership else self.request.user.role
+
+    def can_publish(self):
+        return (
+            self.request.user.is_superuser
+            or self.membership_role() in self.DIRECTION_ROLES
+        )
+
+    def ensure_publisher(self):
+        if not self.can_publish():
+            raise serializers.ValidationError(
+                {"permission": "Seuls le propriétaire, l’administrateur, le censeur "
+                               "ou le proviseur peuvent publier une annonce."}
+            )
+
+    def taught_class_ids(self, year):
+        return set(
+            TeacherClassAssignment.objects.filter(
+                teacher=self.request.user, school=self.get_school(), academic_year=year,
+            ).values_list("school_class_id", flat=True)
+        )
+
+    def guarded_class_ids(self, year):
+        """Classes des enfants dont l'utilisateur est tuteur.
+
+        Un parent n'a pas d'appartenance à l'école : c'est ce lien de tutelle
+        qui le rattache aux classes de ses enfants.
+        """
+        return set(
+            StudentEnrollment.objects.filter(
+                guardian=self.request.user, school=self.get_school(),
+                academic_year=year, status=StudentEnrollment.Status.ACTIVE,
+            ).values_list("school_class_id", flat=True)
+        )
+
+    def visible_announcements(self, year):
+        """Annonces publiées qui s'adressent à cet utilisateur."""
+        role = self.membership_role()
+        today = timezone.localdate()
+
+        queryset = Announcement.objects.filter(
+            school=self.get_school(), academic_year=year, is_published=True,
+        ).filter(
+            # Une annonce expirée sort des listes ; sans date d'expiration
+            # elle reste visible indéfiniment.
+            Q(expires_on__isnull=True) | Q(expires_on__gte=today)
+        )
+
+        if self.can_publish():
+            # La direction voit tout, y compris ce qu'elle n'a pas écrit :
+            # elle doit pouvoir relire ce qui circule dans l'établissement.
+            return queryset.distinct()
+
+        is_staff_member = role not in (CustomUser.Role.PARENT, CustomUser.Role.STUDENT)
+        reachable = self.taught_class_ids(year) | self.guarded_class_ids(year)
+
+        visibility = Q(audience=Announcement.Audience.EVERYONE)
+        if is_staff_member:
+            visibility |= Q(audience=Announcement.Audience.STAFF)
+        visibility |= Q(audience=Announcement.Audience.ROLES, roles__contains=role)
+        if reachable:
+            visibility |= Q(
+                audience=Announcement.Audience.CLASSES, classes__id__in=reachable,
+            )
+        return queryset.filter(visibility).distinct()
+
+
+class AnnouncementListView(CommunicationMixin, APIView):
+    """Annonces visibles par l'utilisateur, et publication pour la direction."""
+
+    def get(self, request, school_pk):
+        year = self.get_academic_year()
+        announcements = list(
+            self.visible_announcements(year)
+            .select_related("author")
+            .prefetch_related("classes")[:100]
+        )
+        read_ids = set(
+            AnnouncementRead.objects.filter(
+                user=request.user, announcement__in=announcements,
+            ).values_list("announcement_id", flat=True)
+        )
+        return Response({
+            "announcements": AnnouncementSerializer(
+                announcements, many=True, context={"read_ids": read_ids},
+            ).data,
+            "unread_count": sum(
+                1 for item in announcements if item.id not in read_ids
+            ),
+            "can_publish": self.can_publish(),
+        })
+
+    @transaction.atomic
+    def post(self, request, school_pk):
+        self.ensure_publisher()
+        year = self.get_academic_year()
+        serializer = AnnouncementSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        classes = serializer.validated_data.pop("classes", [])
+        announcement = serializer.save(
+            school=self.get_school(), academic_year=year, author=request.user,
+        )
+        if classes:
+            invalid = [
+                item.group for item in classes
+                if item.school_id != self.get_school().id
+                or item.academic_year_id != year.id
+            ]
+            if invalid:
+                raise serializers.ValidationError(
+                    {"classes": f"Classe hors de cette école ou de cette année : {', '.join(invalid)}."}
+                )
+            announcement.classes.set(classes)
+        return Response(
+            AnnouncementSerializer(announcement, context={"read_ids": set()}).data,
+            status=201,
+        )
+
+
+class AnnouncementDetailView(CommunicationMixin, APIView):
+    """Marquer lue, ou retirer une annonce."""
+
+    def get_announcement(self, year, pk):
+        try:
+            return self.visible_announcements(year).get(pk=pk)
+        except (Announcement.DoesNotExist, ValueError):
+            raise serializers.ValidationError({"announcement": "Annonce introuvable."})
+
+    def post(self, request, school_pk, pk):
+        """Accusé de lecture. Rejouer l'appel ne crée pas de doublon."""
+        year = self.get_academic_year()
+        announcement = self.get_announcement(year, pk)
+        AnnouncementRead.objects.get_or_create(
+            announcement=announcement, user=request.user,
+        )
+        return Response({"detail": "Annonce marquée comme lue."})
+
+    def delete(self, request, school_pk, pk):
+        self.ensure_publisher()
+        year = self.get_academic_year()
+        self.get_announcement(year, pk).delete()
+        return Response(status=204)
+
+
+class ConversationListView(CommunicationMixin, APIView):
+    """Fils de discussion de l'utilisateur, et ouverture d'un nouveau fil."""
+
+    def get(self, request, school_pk):
+        conversations = (
+            Conversation.objects
+            .filter(school=self.get_school(), participants=request.user)
+            .prefetch_related("participants", "messages")
+            .distinct()
+        )
+        data = ConversationSerializer(
+            conversations, many=True, context={"user_id": request.user.id},
+        ).data
+        return Response({
+            "conversations": data,
+            "unread_count": sum(item["unread_count"] for item in data),
+        })
+
+    @transaction.atomic
+    def post(self, request, school_pk):
+        """Ouvre un fil et y dépose le premier message."""
+        school = self.get_school()
+        body = str(request.data.get("body", "")).strip()
+        files = request.FILES.getlist("attachments")
+        if not body and not files:
+            raise serializers.ValidationError({"body": "Le message ne peut pas être vide."})
+
+        # En JSON les destinataires arrivent en liste ; en multipart — le
+        # format employé dès qu'il y a une pièce jointe — ils arrivent en
+        # champs répétés, à relire avec `getlist`, et sous forme de chaînes.
+        if hasattr(request.data, "getlist"):
+            raw_ids = request.data.getlist("participants")
+        else:
+            raw_ids = request.data.get("participants")
+        if not isinstance(raw_ids, (list, tuple)):
+            raw_ids = [raw_ids] if raw_ids not in (None, "") else []
+
+        wanted = set()
+        for value in raw_ids:
+            try:
+                wanted.add(int(value))
+            except (TypeError, ValueError):
+                raise serializers.ValidationError(
+                    {"participants": "Destinataire invalide."}
+                )
+        if not wanted:
+            raise serializers.ValidationError(
+                {"participants": "Choisissez au moins un destinataire."}
+            )
+
+        people = [person for person in self.reachable_users() if person.id in wanted]
+        if len(people) != len(wanted):
+            raise serializers.ValidationError(
+                {"participants": "Un destinataire n’est pas joignable dans cette école."}
+            )
+
+        conversation = Conversation.objects.create(
+            school=school,
+            subject=str(request.data.get("subject", "")).strip()[:180],
+            started_by=request.user,
+        )
+        conversation.participants.set([request.user, *people])
+        message = Message.objects.create(
+            conversation=conversation, sender=request.user, body=body,
+        )
+        save_attachments(message, files)
+        # L'expéditeur a évidemment lu son propre message.
+        message.read_by.add(request.user)
+        conversation.last_message_at = message.sent_at
+        conversation.save(update_fields=["last_message_at"])
+
+        return Response(
+            ConversationSerializer(
+                conversation, context={"user_id": request.user.id},
+            ).data,
+            status=201,
+        )
+
+    def reachable_users(self):
+        """Personnes joignables : le personnel de l'école, et les parents.
+
+        Le personnel se joint par son appartenance à l'école ; les parents,
+        par le lien de tutelle sur une inscription — ils n'ont pas
+        d'appartenance.
+        """
+        school = self.get_school()
+        staff = Q(school_memberships__school=school, school_memberships__is_active=True)
+        guardians = Q(guarded_student_enrollments__school=school)
+        owner = Q(pk=school.owner_id)
+        return (
+            CustomUser.objects
+            .filter(staff | guardians | owner)
+            .exclude(pk=self.request.user.pk)
+            .exclude(is_archived=True)
+            .exclude(role=CustomUser.Role.STUDENT)
+            .distinct()
+        )
+
+
+class ConversationDetailView(CommunicationMixin, APIView):
+    """Messages d'un fil, et réponse."""
+
+    def get_conversation(self, pk):
+        try:
+            return Conversation.objects.prefetch_related("participants").get(
+                pk=pk, school=self.get_school(), participants=self.request.user,
+            )
+        except (Conversation.DoesNotExist, ValueError):
+            raise serializers.ValidationError(
+                {"conversation": "Conversation introuvable."}
+            )
+
+    def get(self, request, school_pk, pk):
+        conversation = self.get_conversation(pk)
+        messages = conversation.messages.select_related("sender").prefetch_related("attachments")
+
+        # Ouvrir le fil vaut lecture : on ne marque que ce qui vient d'autrui.
+        unread = messages.exclude(sender=request.user).exclude(read_by=request.user)
+        for message in unread:
+            message.read_by.add(request.user)
+
+        return Response({
+            "id": conversation.id,
+            "subject": conversation.subject,
+            "participants": [
+                {
+                    "id": person.id,
+                    "name": person.get_full_name(),
+                    "role": person.get_role_display(),
+                }
+                for person in conversation.participants.all()
+            ],
+            "messages": MessageSerializer(
+                messages, many=True, context={"request": request},
+            ).data,
+        })
+
+    @transaction.atomic
+    def post(self, request, school_pk, pk):
+        conversation = self.get_conversation(pk)
+        body = str(request.data.get("body", "")).strip()
+        files = request.FILES.getlist("attachments")
+        # Une photo ou un vocal se suffit à lui-même ; c'est le message sans
+        # texte *ni* fichier qui n'a pas de sens.
+        if not body and not files:
+            raise serializers.ValidationError({"body": "Le message ne peut pas être vide."})
+
+        message = Message.objects.create(
+            conversation=conversation, sender=request.user, body=body,
+        )
+        saved = save_attachments(message, files)
+        duration = attachment_duration(request)
+        if duration and len(saved) == 1:
+            saved[0].duration_seconds = duration
+            saved[0].save(update_fields=["duration_seconds"])
+
+        message.read_by.add(request.user)
+        conversation.last_message_at = message.sent_at
+        conversation.save(update_fields=["last_message_at"])
+        return Response(
+            MessageSerializer(message, context={"request": request}).data,
+            status=201,
+        )
+
+
+class MessageRecipientsView(ConversationListView):
+    """Personnes à qui l'utilisateur peut écrire dans cette école."""
+
+    def get(self, request, school_pk):
+        people = self.reachable_users().order_by("last_name", "first_name")
+        return Response({
+            "recipients": [
+                {
+                    "id": person.id,
+                    "name": person.get_full_name(),
+                    "role": person.get_role_display(),
+                    "role_value": person.role,
+                }
+                for person in people[:500]
+            ],
+        })
+
+    def post(self, request, school_pk):
+        # Cette vue n'hérite de `ConversationListView` que pour `reachable_users` ;
+        # créer un fil passe par la liste des conversations.
+        raise serializers.ValidationError(
+            {"detail": "Utilisez la liste des conversations pour ouvrir un fil."}
+        )

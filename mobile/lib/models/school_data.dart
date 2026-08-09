@@ -75,12 +75,20 @@ class GradeSession {
     required this.name,
     required this.label,
     required this.classes,
+    required this.isCurrent,
+    this.startDate = '',
+    this.endDate = '',
   });
 
   factory GradeSession.fromJson(Map<String, dynamic> json) => GradeSession(
         id: asInt(json['id']) ?? 0,
         name: asText(json['name']),
         label: asText(json['label']),
+        startDate: asText(json['start_date']),
+        endDate: asText(json['end_date']),
+        // Calculé par le serveur : c'est lui qui fait foi sur la date, pas
+        // l'horloge du téléphone.
+        isCurrent: json['is_current'] == true,
         classes: (json['classes'] as List? ?? [])
             .map((item) => GradeClass.fromJson(item as Map<String, dynamic>))
             .toList(),
@@ -89,7 +97,43 @@ class GradeSession {
   final int id;
   final String name;
   final String label;
+  final String startDate;
+  final String endDate;
+  final bool isCurrent;
   final List<GradeClass> classes;
+}
+
+/// Session à mettre en avant : celle qui couvre aujourd'hui, sinon la plus
+/// récente déjà commencée, sinon la première.
+///
+/// Hors période — pendant les vacances, ou avant l'ouverture de la première
+/// session — aucune session n'est « en cours ». On montre alors la dernière
+/// travaillée plutôt que rien : c'est celle dont l'enseignant a besoin.
+GradeSession? currentSession(List<GradeSession> sessions) {
+  if (sessions.isEmpty) return null;
+  return sessions[defaultSessionIndex(sessions)];
+}
+
+/// Position de la session à ouvrir par défaut dans une liste d'onglets.
+///
+/// Renvoie toujours un index valide pour une liste non vide, pour que les
+/// écrans puissent indexer sans vérification supplémentaire.
+int defaultSessionIndex(List<GradeSession> sessions) {
+  if (sessions.isEmpty) return 0;
+  final live = sessions.indexWhere((session) => session.isCurrent);
+  if (live >= 0) return live;
+
+  // Hors période : la plus récente déjà commencée est celle sur laquelle on
+  // travaillait, donc celle qu'on veut retrouver en rouvrant l'application.
+  var best = -1;
+  for (var index = 0; index < sessions.length; index++) {
+    if (sessions[index].startDate.isEmpty) continue;
+    if (best < 0 ||
+        sessions[index].startDate.compareTo(sessions[best].startDate) > 0) {
+      best = index;
+    }
+  }
+  return best >= 0 ? best : 0;
 }
 
 class GradeClass {
