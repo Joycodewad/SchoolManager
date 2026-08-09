@@ -47,6 +47,10 @@ export default function Login() {
         
         // Redirect to dashboard after a short delay
         setTimeout(() => {
+          if (data.user.is_superuser) {
+            navigate("/owners");
+            return;
+          }
           navigate(data.schools[0] ? `/schools/${data.schools[0].id}/dashboard` : "/schools");
         }, 1000);
     } catch (error) {

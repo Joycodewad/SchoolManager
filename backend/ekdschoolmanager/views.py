@@ -4,12 +4,14 @@ import posixpath
 import re
 import zipfile
 import xml.etree.ElementTree as ET
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 
 from django.contrib.auth import authenticate
 from django.db import transaction
-from django.db.models import Count, Q, Sum
+from django.db.models import Count, Max, Q, Sum
+from django.http import HttpResponse
+from django.utils import timezone
 from django.utils.text import slugify
 from rest_framework import serializers, status, viewsets
 from rest_framework.authtoken.models import Token
@@ -19,8 +21,15 @@ from rest_framework.permissions import AllowAny, BasePermission
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .models import AcademicSession, AcademicYear, ClassFeeItem, ClassSubject, CustomUser, ExpenseCategory, FeeInstallment, FeePayment, GradeEntry, GradeScheme, School, SchoolClass, SchoolExpense, SchoolLevel, SchoolMembership, StudentEnrollment, Subject, TeacherAssignmentSubject, TeacherClassAssignment, TeacherUnavailability, TuitionFeePlan
-from .serializers import AcademicSessionSerializer, AcademicYearSerializer, CustomUserSerializer, ExpenseCategorySerializer, FeePaymentSerializer, GradeSchemeSerializer, SchoolClassSerializer, SchoolExpenseSerializer, SchoolLevelSerializer, SchoolMembershipSerializer, SchoolSerializer, StudentEnrollmentSerializer, SubjectSerializer, TuitionFeePlanSerializer, normalize_togolese_phone
+from .models import ReportCard, ReportCardAppreciation, ReportCardSettings, SubjectCategoryOrder, AcademicSession, AcademicYear, AttendanceRecord, AttendanceSession, ClassFeeItem, ClassSubject, CustomUser, DisciplineRecord, ExpenseCategory, FeeInstallment, FeePayment, GradeEntry, GradeScheme, School, SchoolClass, SchoolExpense, SchoolLevel, SchoolMembership, StudentEnrollment, ClassGroupSession, ExcludedTimetableClass, Subject, SubjectCategory, SubjectPeriodRestriction, TeacherAssignmentSubject, TeacherClassAssignment, TeacherUnavailability, Timetable, TimetablePeriod, TuitionFeePlan
+from .timetable import DAY_LABELS, create_default_periods, describe_unplaced, irreducible_deficit, regenerate
+from .timetable_pdf import class_timetables_pdf, teacher_timetables_pdf
+from .reportcards import (
+    appreciations_for, generate_class, generate_school, settings_for,
+    student_history, term_history,
+)
+from .reportcard_pdf import report_cards_pdf
+from .serializers import AcademicSessionSerializer, AcademicYearSerializer, AttendanceSessionSerializer, CustomUserSerializer, DisciplineRecordSerializer, ExpenseCategorySerializer, FeePaymentSerializer, GradeSchemeSerializer, SchoolClassSerializer, SchoolExpenseSerializer, SchoolLevelSerializer, SchoolMembershipSerializer, SchoolSerializer, StudentEnrollmentSerializer, SubjectCategorySerializer, SubjectSerializer, TuitionFeePlanSerializer, normalize_togolese_phone
 
 
 XLSX_NS = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
@@ -520,6 +529,284 @@ class SchoolExpenseDetailView(FinanceMixin, APIView):
         return Response(status=204)
 
 
+class DisciplineMixin(SchoolScopedMixin):
+    def get_academic_year(self):
+        year_id = self.request.headers.get("X-Academic-Year-ID")
+        if not year_id:
+            raise serializers.ValidationError({"academic_year": "Sélectionnez une année académique."})
+        try:
+            return AcademicYear.objects.get(pk=year_id, school=self.get_school())
+        except (AcademicYear.DoesNotExist, ValueError):
+            raise serializers.ValidationError({"academic_year": "Année académique invalide."})
+
+    def ensure_discipline_access(self):
+        school = self.get_school()
+        allowed_roles = [
+            CustomUser.Role.ADMIN, CustomUser.Role.OWNER, CustomUser.Role.CENSEUR,
+            CustomUser.Role.PROVISEUR, CustomUser.Role.SURVEILLANT,
+            CustomUser.Role.TEACHER, CustomUser.Role.SECRETARY,
+        ]
+        if not (
+            self.request.user.is_superuser
+            or school.owner_id == self.request.user.id
+            or school.memberships.filter(user=self.request.user, role__in=allowed_roles, is_active=True).exists()
+        ):
+            raise serializers.ValidationError({"permission": "Vous ne pouvez pas accéder à la discipline de cette école."})
+
+
+class DisciplineRecordListView(DisciplineMixin, APIView):
+    def get(self, request, school_pk):
+        self.ensure_discipline_access()
+        year = self.get_academic_year()
+        enrollments = StudentEnrollment.objects.filter(
+            school=self.get_school(), academic_year=year, status=StudentEnrollment.Status.ACTIVE,
+        ).select_related("student", "school_class", "level").order_by("student__last_name", "student__first_name")
+        records = DisciplineRecord.objects.filter(school=self.get_school(), academic_year=year).select_related(
+            "enrollment__student", "enrollment__school_class", "recorded_by",
+        )
+        enrollment_id = request.query_params.get("enrollment")
+        if enrollment_id:
+            records = records.filter(enrollment_id=enrollment_id)
+        entry_type = request.query_params.get("entry_type")
+        if entry_type in {DisciplineRecord.EntryType.LATE, DisciplineRecord.EntryType.ABSENCE, DisciplineRecord.EntryType.INCIDENT}:
+            records = records.filter(entry_type=entry_type)
+        total_late_hours = records.filter(entry_type=DisciplineRecord.EntryType.LATE).aggregate(total=Sum("late_hours"))["total"] or Decimal("0")
+        total_absence_hours = records.filter(entry_type=DisciplineRecord.EntryType.ABSENCE).aggregate(total=Sum("late_hours"))["total"] or Decimal("0")
+        return Response({
+            "students": [{
+                "id": item.id,
+                "enrollment_number": item.enrollment_number,
+                "student_name": item.student.get_full_name(),
+                "class_name": item.school_class.name if item.school_class else "Sans classe",
+                "level_name": item.level.name if item.level else "",
+            } for item in enrollments],
+            "records": DisciplineRecordSerializer(records, many=True).data,
+            "summary": {
+                "total_late_hours": total_late_hours,
+                "total_absence_hours": total_absence_hours,
+                "absence_count": records.filter(entry_type=DisciplineRecord.EntryType.ABSENCE).count(),
+                "incident_count": records.filter(entry_type=DisciplineRecord.EntryType.INCIDENT).count(),
+                "record_count": records.count(),
+            },
+        })
+
+    def post(self, request, school_pk):
+        self.ensure_discipline_access()
+        year = self.get_academic_year()
+        serializer = DisciplineRecordSerializer(data=request.data, context={"school": self.get_school(), "academic_year": year})
+        serializer.is_valid(raise_exception=True)
+        serializer.save(school=self.get_school(), academic_year=year, recorded_by=request.user)
+        return Response(serializer.data, status=201)
+
+
+class AttendanceMixin(SchoolScopedMixin):
+    """Accès à l'appel : ceux qui font la classe et ceux qui la surveillent."""
+
+    def get_academic_year(self):
+        year_id = self.request.headers.get("X-Academic-Year-ID")
+        if not year_id:
+            raise serializers.ValidationError({"academic_year": "Sélectionnez une année académique."})
+        try:
+            return AcademicYear.objects.get(pk=year_id, school=self.get_school())
+        except (AcademicYear.DoesNotExist, ValueError):
+            raise serializers.ValidationError({"academic_year": "Année académique invalide."})
+
+    def ensure_attendance_access(self):
+        school = self.get_school()
+        allowed_roles = [
+            CustomUser.Role.ADMIN, CustomUser.Role.OWNER, CustomUser.Role.CENSEUR,
+            CustomUser.Role.PROVISEUR, CustomUser.Role.SURVEILLANT,
+            CustomUser.Role.TEACHER, CustomUser.Role.SECRETARY,
+        ]
+        if not (
+            self.request.user.is_superuser
+            or school.owner_id == self.request.user.id
+            or school.memberships.filter(
+                user=self.request.user, role__in=allowed_roles, is_active=True,
+            ).exists()
+        ):
+            raise serializers.ValidationError(
+                {"permission": "Vous ne pouvez pas accéder à l’appel de cette école."}
+            )
+
+    def get_class(self, year, class_id):
+        try:
+            return SchoolClass.objects.select_related("level").get(
+                pk=class_id, school=self.get_school(), academic_year=year,
+            )
+        except (SchoolClass.DoesNotExist, ValueError, TypeError):
+            raise serializers.ValidationError({"school_class": "Classe invalide."})
+
+
+class AttendanceSessionListView(AttendanceMixin, APIView):
+    """Appels d'une classe et relevé du jour."""
+
+    def get(self, request, school_pk):
+        self.ensure_attendance_access()
+        year = self.get_academic_year()
+        sessions = AttendanceSession.objects.filter(
+            school=self.get_school(), academic_year=year,
+        ).select_related("school_class", "class_subject__subject", "taken_by").prefetch_related(
+            "records__enrollment__student",
+        )
+
+        class_id = request.query_params.get("school_class")
+        if class_id:
+            sessions = sessions.filter(school_class_id=class_id)
+        taken_on = request.query_params.get("taken_on")
+        if taken_on:
+            sessions = sessions.filter(taken_on=taken_on)
+
+        # Un enseignant ne voit que les classes qui lui sont confiées : l'appel
+        # d'une classe voisine ne le regarde pas.
+        if not self.can_supervise():
+            sessions = sessions.filter(
+                school_class__in=self.taught_class_ids(year),
+            )
+
+        return Response({
+            "sessions": AttendanceSessionSerializer(sessions[:200], many=True).data,
+            "can_supervise": self.can_supervise(),
+        })
+
+    def can_supervise(self):
+        """Vue d'ensemble : direction et surveillance, pas les enseignants."""
+        school = self.get_school()
+        roles = [
+            CustomUser.Role.ADMIN, CustomUser.Role.OWNER, CustomUser.Role.CENSEUR,
+            CustomUser.Role.PROVISEUR, CustomUser.Role.SURVEILLANT, CustomUser.Role.SECRETARY,
+        ]
+        return (
+            self.request.user.is_superuser
+            or school.owner_id == self.request.user.id
+            or school.memberships.filter(
+                user=self.request.user, role__in=roles, is_active=True,
+            ).exists()
+        )
+
+    def taught_class_ids(self, year):
+        return TeacherClassAssignment.objects.filter(
+            teacher=self.request.user, school=self.get_school(), academic_year=year,
+        ).values_list("school_class_id", flat=True)
+
+    @transaction.atomic
+    def post(self, request, school_pk):
+        """Enregistre un appel. Refaire l'appel du même créneau le corrige."""
+        self.ensure_attendance_access()
+        year = self.get_academic_year()
+        school_class = self.get_class(year, request.data.get("school_class"))
+
+        if not self.can_supervise() and school_class.id not in set(self.taught_class_ids(year)):
+            raise serializers.ValidationError(
+                {"school_class": "Cette classe ne vous est pas confiée."}
+            )
+
+        taken_on = request.data.get("taken_on") or timezone.localdate()
+        class_subject_id = request.data.get("class_subject") or None
+        if class_subject_id:
+            if not ClassSubject.objects.filter(
+                pk=class_subject_id, school_class=school_class,
+            ).exists():
+                raise serializers.ValidationError(
+                    {"class_subject": "Cette matière n’est pas enseignée dans cette classe."}
+                )
+
+        session, _ = AttendanceSession.objects.update_or_create(
+            school_class=school_class, taken_on=taken_on,
+            class_subject_id=class_subject_id,
+            period=str(request.data.get("period", "")).strip()[:40],
+            defaults={
+                "school": self.get_school(),
+                "academic_year": year,
+                "taken_by": request.user,
+                "note": str(request.data.get("note", "")).strip(),
+            },
+        )
+
+        entries = request.data.get("records")
+        if entries is not None:
+            if not isinstance(entries, list):
+                raise serializers.ValidationError(
+                    {"records": "Les présences doivent être envoyées sous forme de liste."}
+                )
+            # Les inscriptions valides sont celles de la classe : une ligne
+            # portant un élève d'ailleurs est refusée plutôt qu'ignorée.
+            allowed = set(
+                StudentEnrollment.objects.filter(
+                    school_class=school_class, status=StudentEnrollment.Status.ACTIVE,
+                ).values_list("id", flat=True)
+            )
+            statuses = dict(AttendanceRecord.Status.choices)
+            rows = []
+            for entry in entries:
+                enrollment_id = entry.get("enrollment")
+                if enrollment_id not in allowed:
+                    raise serializers.ValidationError(
+                        {"records": "Un élève de la liste n’appartient pas à cette classe."}
+                    )
+                status_value = str(entry.get("status", AttendanceRecord.Status.PRESENT))
+                if status_value not in statuses:
+                    raise serializers.ValidationError({"records": "Statut de présence inconnu."})
+                rows.append(AttendanceRecord(
+                    session=session, enrollment_id=enrollment_id, status=status_value,
+                    minutes_late=max(0, int(entry.get("minutes_late") or 0)),
+                    comment=str(entry.get("comment", "")).strip()[:200],
+                ))
+            # Réécriture complète : l'appel corrigé remplace le précédent, sans
+            # laisser de ligne orpheline pour un élève retiré de la classe.
+            session.records.all().delete()
+            AttendanceRecord.objects.bulk_create(rows)
+
+        session.refresh_from_db()
+        return Response(AttendanceSessionSerializer(session).data, status=201)
+
+
+class AttendanceSheetView(AttendanceMixin, APIView):
+    """Feuille d'appel d'une classe pour une date : élèves et relevé existant."""
+
+    def get(self, request, school_pk):
+        self.ensure_attendance_access()
+        year = self.get_academic_year()
+        school_class = self.get_class(year, request.query_params.get("school_class"))
+        taken_on = request.query_params.get("taken_on") or str(timezone.localdate())
+
+        enrollments = StudentEnrollment.objects.filter(
+            school_class=school_class, status=StudentEnrollment.Status.ACTIVE,
+        ).select_related("student").order_by("student__last_name", "student__first_name")
+
+        session = AttendanceSession.objects.filter(
+            school_class=school_class, taken_on=taken_on,
+            class_subject_id=request.query_params.get("class_subject") or None,
+            period=request.query_params.get("period", ""),
+        ).prefetch_related("records").first()
+        existing = {record.enrollment_id: record for record in session.records.all()} if session else {}
+
+        return Response({
+            "school_class": {"id": school_class.id, "name": school_class.group},
+            "taken_on": taken_on,
+            # Vrai quand l'appel a déjà été fait : le mobile distingue alors
+            # « aucun absent » de « appel non fait ».
+            "is_taken": session is not None,
+            "session_id": session.id if session else None,
+            "students": [
+                {
+                    "enrollment": item.id,
+                    "enrollment_number": item.enrollment_number,
+                    "student_name": item.student.get_full_name(),
+                    "status": existing[item.id].status if item.id in existing
+                              else AttendanceRecord.Status.PRESENT,
+                    "minutes_late": existing[item.id].minutes_late if item.id in existing else 0,
+                    "comment": existing[item.id].comment if item.id in existing else "",
+                }
+                for item in enrollments
+            ],
+            "statuses": [
+                {"value": value, "label": label}
+                for value, label in AttendanceRecord.Status.choices
+            ],
+        })
+
+
 class GradeMixin(SchoolScopedMixin):
     def get_academic_year(self):
         try:
@@ -889,11 +1176,35 @@ class TeacherViewSet(CustomUserViewSet):
         return Response({"slots": len(normalized)})
 
 
+class SubjectCategoryViewSet(SchoolScopedMixin, viewsets.ModelViewSet):
+    """Types de matières définis librement par l'établissement."""
+
+    serializer_class = SubjectCategorySerializer
+
+    def get_queryset(self):
+        return SubjectCategory.objects.filter(school=self.get_school())
+
+    def perform_create(self, serializer):
+        self.ensure_manager()
+        serializer.save(school=self.get_school())
+
+    def perform_update(self, serializer):
+        self.ensure_manager()
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        self.ensure_manager()
+        # Les matières classées ici retrouvent simplement un type vide.
+        instance.delete()
+
+
 class SubjectViewSet(SchoolScopedMixin, viewsets.ModelViewSet):
     serializer_class = SubjectSerializer
 
     def get_queryset(self):
-        return Subject.objects.filter(school=self.get_school(), is_active=True)
+        return Subject.objects.filter(
+            school=self.get_school(), is_active=True,
+        ).select_related("category")
 
     def perform_create(self, serializer):
         self.ensure_manager()
@@ -1471,3 +1782,1151 @@ class OwnerViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         serializer.save(role=CustomUser.Role.OWNER)
+
+    def perform_destroy(self, instance):
+        instance.is_archived = True
+        instance.is_active = False
+        instance.save(update_fields=["is_archived", "is_active"])
+
+
+class ParentListView(SchoolScopedMixin, APIView):
+    """Parents et tuteurs de l'école, avec les élèves dont ils ont la charge."""
+
+    def get(self, request, school_pk):
+        school = self.get_school()
+        enrollments = StudentEnrollment.objects.filter(
+            school=school, guardian__isnull=False, status=StudentEnrollment.Status.ACTIVE,
+        ).select_related("guardian", "student", "school_class", "school_class__level", "academic_year")
+
+        year_id = request.headers.get("X-Academic-Year-ID")
+        if year_id:
+            enrollments = enrollments.filter(academic_year_id=year_id)
+
+        parents = {}
+        for enrollment in enrollments:
+            guardian = enrollment.guardian
+            entry = parents.setdefault(guardian.id, {
+                "id": guardian.id,
+                "username": guardian.username,
+                "last_name": guardian.last_name,
+                "first_names": guardian.first_name,
+                "phone": guardian.phone,
+                "email": guardian.email,
+                "profession": guardian.profession,
+                "address": guardian.address,
+                "children": [],
+            })
+            entry["children"].append({
+                "enrollment_id": enrollment.id,
+                "student_id": enrollment.student_id,
+                "name": enrollment.student.get_full_name(),
+                "matricule": enrollment.enrollment_number,
+                "class_name": enrollment.school_class.group if enrollment.school_class else None,
+                "level": enrollment.school_class.level.name if enrollment.school_class else None,
+            })
+
+        rows = sorted(parents.values(), key=lambda item: (item["last_name"] or "", item["first_names"] or ""))
+        students_total = StudentEnrollment.objects.filter(
+            school=school, status=StudentEnrollment.Status.ACTIVE,
+            **({"academic_year_id": year_id} if year_id else {}),
+        ).count()
+        return Response({
+            "parents": rows,
+            "students_total": students_total,
+            "students_with_guardian": sum(len(item["children"]) for item in rows),
+        })
+
+
+class TimetableMixin(SchoolScopedMixin):
+    def get_academic_year(self):
+        try:
+            return AcademicYear.objects.get(
+                pk=self.request.headers.get("X-Academic-Year-ID"), school=self.get_school(),
+            )
+        except (AcademicYear.DoesNotExist, ValueError, TypeError):
+            raise serializers.ValidationError({"academic_year": "Sélectionnez une année académique valide."})
+
+    def can_manage(self):
+        school = self.get_school()
+        roles = [CustomUser.Role.OWNER, CustomUser.Role.ADMIN, CustomUser.Role.CENSEUR, CustomUser.Role.PROVISEUR]
+        return (
+            self.request.user.is_superuser
+            or school.owner_id == self.request.user.id
+            or school.memberships.filter(user=self.request.user, role__in=roles, is_active=True).exists()
+        )
+
+    def ensure_manager_access(self):
+        if not self.can_manage():
+            raise serializers.ValidationError(
+                {"permission": "Seuls le propriétaire, l’administrateur, le censeur ou le proviseur peuvent gérer l’emploi du temps."}
+            )
+
+    def serialize(self, timetable):
+        slots = timetable.slots.select_related(
+            "school_class", "school_class__level", "class_subject__subject", "teacher",
+        ).all()
+        return {
+            "id": timetable.id,
+            "status": timetable.status,
+            "status_label": timetable.get_status_display(),
+            "is_validated": timetable.is_validated,
+            "days_per_week": timetable.days_per_week,
+            "period_duration": timetable.period_duration,
+            "generated_at": timetable.generated_at,
+            "validated_at": timetable.validated_at,
+            "options": {
+                "enforce_paired_hours": timetable.enforce_paired_hours,
+                "enforce_single_hour_middle": timetable.enforce_single_hour_middle,
+                "enforce_day_spacing": timetable.enforce_day_spacing,
+                "enforce_max_two_hours": timetable.enforce_max_two_hours,
+                "skip_primary": timetable.skip_primary,
+            },
+            "days_without_afternoon": timetable.days_without_afternoon or [],
+            # Volume horaire de la classe la plus chargée : sert à prévenir
+            # l'utilisateur quand la grille devient trop courte.
+            "max_class_hours": ClassSubject.objects.filter(
+                school_class__academic_year=timetable.academic_year_id,
+            ).values("school_class").annotate(total=Sum("weekly_hours")).aggregate(
+                peak=Max("total"),
+            )["peak"] or 0,
+            "periods": [{
+                "id": period.id,
+                "label": period.label,
+                "kind": period.kind,
+                "kind_label": period.get_kind_display(),
+                "start_time": period.start_time,
+                "end_time": period.end_time,
+                "order": period.order,
+            } for period in timetable.periods.all()],
+            "restrictions": [{
+                "id": restriction.id,
+                "subject": restriction.subject_id,
+                "subject_name": restriction.subject.name,
+                "period": restriction.period_id,
+                "day": restriction.day,
+            } for restriction in timetable.restrictions.select_related("subject").all()],
+            "excluded_classes": [{
+                "id": exclusion.id,
+                "subject": exclusion.subject_id,
+                "subject_name": exclusion.subject.name,
+                "classes": [item.id for item in exclusion.classes.all()],
+                "class_names": [item.group for item in exclusion.classes.all()],
+            } for exclusion in timetable.excluded_classes.select_related("subject").prefetch_related("classes")],
+            "class_groups": [{
+                "id": group.id,
+                "subject": group.subject_id,
+                "subject_name": group.subject.name,
+                "classes": [item.id for item in group.classes.all()],
+                "class_names": [item.group for item in group.classes.all()],
+            } for group in timetable.class_groups.select_related("subject").prefetch_related("classes")],
+            "slots": [{
+                "id": slot.id,
+                "class_id": slot.school_class_id,
+                "class_name": slot.school_class.group,
+                "level": slot.school_class.level.name,
+                "subject": slot.class_subject.subject.name,
+                "subject_code": slot.class_subject.subject.code,
+                "teacher": slot.teacher.get_full_name() if slot.teacher else None,
+                "teacher_id": slot.teacher_id,
+                "day": slot.day,
+                "day_label": DAY_LABELS.get(slot.day, ""),
+                "start_time": slot.start_time,
+                "end_time": slot.end_time,
+            } for slot in slots],
+        }
+
+
+class TimetableView(TimetableMixin, APIView):
+    """Consultation, génération et suppression de l'emploi du temps annuel."""
+
+    def get(self, request, school_pk):
+        year = self.get_academic_year()
+        timetable = Timetable.objects.filter(school=self.get_school(), academic_year=year).first()
+        if not timetable:
+            return Response({"timetable": None, "can_manage": self.can_manage()})
+        return Response({"timetable": self.serialize(timetable), "can_manage": self.can_manage()})
+
+    def post(self, request, school_pk):
+        """Génère (ou régénère) l'emploi du temps de l'année."""
+        self.ensure_manager_access()
+        school = self.get_school()
+        year = self.get_academic_year()
+
+        timetable = Timetable.objects.filter(school=school, academic_year=year).first()
+        if timetable and timetable.is_validated:
+            raise serializers.ValidationError(
+                {"timetable": "L’emploi du temps de cette année est validé. Supprimez-le pour en générer un nouveau."}
+            )
+        if not ClassSubject.objects.filter(school_class__academic_year=year).exists():
+            raise serializers.ValidationError(
+                {"timetable": "Aucune matière n’est configurée pour cette année académique."}
+            )
+
+        if not timetable:
+            timetable = Timetable.objects.create(school=school, academic_year=year, generated_by=request.user)
+        for field in ("days_per_week", "period_duration"):
+            if field in request.data:
+                setattr(timetable, field, int(request.data[field]))
+        timetable.save()
+
+        _, unplaced, relaxed, attempts, floor = regenerate(timetable)
+        _, overflow = irreducible_deficit(timetable)
+        timetable.refresh_from_db()
+        return Response({
+            "timetable": self.serialize(timetable),
+            "unplaced": describe_unplaced(unplaced),
+            "relaxed": relaxed,
+            "attempts": attempts,
+            "irreducible": floor,
+            "overloaded_classes": overflow,
+            "can_manage": True,
+        })
+
+    def delete(self, request, school_pk):
+        """Vide la grille sans toucher au paramétrage.
+
+        Seules les cases générées sont effacées : créneaux horaires,
+        interdictions, exclusions, regroupements et options restent tels que
+        l'utilisateur les a réglés. Supprimer la ligne `Timetable` les
+        emporterait tous en cascade.
+        """
+        self.ensure_manager_access()
+        year = self.get_academic_year()
+        timetable = Timetable.objects.filter(school=self.get_school(), academic_year=year).first()
+        if not timetable:
+            raise serializers.ValidationError({"timetable": "Aucun emploi du temps à supprimer."})
+        if timetable.is_validated:
+            raise serializers.ValidationError(
+                {"timetable": "Cet emploi du temps est validé. Repassez-le en brouillon pour le vider."}
+            )
+        timetable.slots.all().delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class TimetableSetupView(TimetableMixin, APIView):
+    """Paramétrage préalable : créneaux horaires, contraintes actives et interdictions."""
+
+    OPTION_FIELDS = [
+        "enforce_paired_hours", "enforce_single_hour_middle",
+        "enforce_day_spacing", "enforce_max_two_hours", "skip_primary",
+    ]
+
+    def get_or_create_timetable(self):
+        school = self.get_school()
+        year = self.get_academic_year()
+        timetable = Timetable.objects.filter(school=school, academic_year=year).first()
+        if not timetable:
+            timetable = Timetable.objects.create(
+                school=school, academic_year=year, generated_by=self.request.user,
+            )
+        if not timetable.periods.exists():
+            create_default_periods(timetable)
+        return timetable
+
+    def get(self, request, school_pk):
+        timetable = self.get_or_create_timetable()
+        year = self.get_academic_year()
+        subjects = Subject.objects.filter(school=self.get_school(), is_active=True).order_by("name")
+        classes = SchoolClass.objects.filter(academic_year=year).select_related("level").order_by("group")
+
+        # Enseignant de chaque couple (classe, matière) : l'interface s'en sert
+        # pour n'autoriser le regroupement qu'entre classes au même professeur.
+        teachers = {}
+        for link in TeacherAssignmentSubject.objects.filter(
+            assignment__academic_year=year,
+        ).select_related("assignment__teacher", "class_subject"):
+            key = f"{link.class_subject.school_class_id}-{link.class_subject.subject_id}"
+            teachers[key] = {
+                "id": link.assignment.teacher_id,
+                "name": link.assignment.teacher.get_full_name() or link.assignment.teacher.last_name,
+            }
+
+        return Response({
+            "timetable": self.serialize(timetable),
+            "subjects": [{"id": subject.id, "name": subject.name, "code": subject.code} for subject in subjects],
+            "classes": [{
+                "id": school_class.id,
+                "name": school_class.group,
+                "level": school_class.level.name,
+            } for school_class in classes],
+            "class_subject_teachers": teachers,
+            "can_manage": self.can_manage(),
+        })
+
+    @transaction.atomic
+    def put(self, request, school_pk):
+        self.ensure_manager_access()
+        timetable = self.get_or_create_timetable()
+        if timetable.is_validated:
+            raise serializers.ValidationError(
+                {"timetable": "Cet emploi du temps est validé. Supprimez-le pour modifier le paramétrage."}
+            )
+
+        for field in self.OPTION_FIELDS:
+            if field in request.data:
+                setattr(timetable, field, bool(request.data[field]))
+        if "days_per_week" in request.data:
+            days = int(request.data["days_per_week"])
+            if not 1 <= days <= 7:
+                raise serializers.ValidationError({"days_per_week": "Indiquez entre 1 et 7 jours."})
+            timetable.days_per_week = days
+
+        if "days_without_afternoon" in request.data:
+            values = request.data["days_without_afternoon"] or []
+            if not isinstance(values, list):
+                raise serializers.ValidationError(
+                    {"days_without_afternoon": "Indiquez une liste de jours."}
+                )
+            closed = set()
+            for value in values:
+                try:
+                    day = int(value)
+                except (TypeError, ValueError):
+                    raise serializers.ValidationError(
+                        {"days_without_afternoon": "Jour invalide."}
+                    )
+                if not 0 <= day <= 6:
+                    raise serializers.ValidationError(
+                        {"days_without_afternoon": "Les jours vont de 0 (lundi) à 6 (dimanche)."}
+                    )
+                closed.add(day)
+            timetable.days_without_afternoon = sorted(closed)
+
+        timetable.save()
+
+        periods = request.data.get("periods")
+        # Correspondance entre l'identifiant envoyé par le client et le créneau
+        # réellement enregistré : les interdictions s'y rattachent ensuite.
+        period_aliases = {}
+        if periods is not None:
+            if not periods:
+                raise serializers.ValidationError({"periods": "Définissez au moins un créneau."})
+            existing = {period.id: period for period in timetable.periods.all()}
+            rows = []
+            for order, item in enumerate(periods, start=1):
+                start = str(item.get("start_time", ""))[:5]
+                end = str(item.get("end_time", ""))[:5]
+                if not start or not end or start >= end:
+                    raise serializers.ValidationError(
+                        {"periods": f"Créneau {order} : l’heure de fin doit suivre l’heure de début."}
+                    )
+                kind = item.get("kind")
+                if kind not in dict(TimetablePeriod.Kind.choices):
+                    kind = TimetablePeriod.Kind.COURSE
+                rows.append({
+                    "id": item.get("id"),
+                    "label": str(item.get("label", ""))[:60],
+                    "kind": kind,
+                    "start": start,
+                    "end": end,
+                    "order": order,
+                })
+
+            starts = [row["start"] for row in rows]
+            if len(set(starts)) != len(starts):
+                raise serializers.ValidationError(
+                    {"periods": "Deux créneaux ne peuvent pas commencer à la même heure."}
+                )
+
+            # Supprimer d'abord les créneaux abandonnés : sans cela leurs horaires
+            # entrent en collision avec ceux qu'on s'apprête à écrire.
+            reused = {row["id"] for row in rows if row["id"] in existing}
+            timetable.periods.exclude(pk__in=reused).delete()
+
+            # Les lignes réutilisées sont d'abord écartées sur des horaires et des
+            # ordres libres : sans cela, permuter deux créneaux violerait les
+            # contraintes d'unicité pendant la réécriture.
+            for offset, period in enumerate(existing[pk] for pk in reused):
+                period.start_time = time(offset // 60, offset % 60, 0)
+                period.end_time = time(offset // 60, offset % 60, 30)
+                period.order = 100 + offset
+                period.save(update_fields=["start_time", "end_time", "order"])
+
+            for row in rows:
+                # Réutiliser la ligne existante préserve les interdictions qui la visent.
+                period = existing[row["id"]] if row["id"] in reused else TimetablePeriod(timetable=timetable)
+                period.label, period.kind = row["label"], row["kind"]
+                period.start_time, period.end_time = row["start"], row["end"]
+                period.order = row["order"]
+                period.save()
+                if row["id"]:
+                    period_aliases[row["id"]] = period.id
+
+        restrictions = request.data.get("restrictions")
+        if restrictions is not None:
+            valid_periods = set(timetable.periods.values_list("id", flat=True))
+            valid_subjects = set(
+                Subject.objects.filter(school=self.get_school()).values_list("id", flat=True)
+            )
+            rows = []
+            seen = set()
+            for item in restrictions:
+                subject_id = item.get("subject")
+                period_id = period_aliases.get(item.get("period"), item.get("period"))
+                day = item.get("day")
+                if subject_id not in valid_subjects or period_id not in valid_periods:
+                    continue
+                key = (subject_id, period_id, day)
+                if key in seen:
+                    continue
+                seen.add(key)
+                rows.append(SubjectPeriodRestriction(
+                    timetable=timetable, subject_id=subject_id, period_id=period_id,
+                    day=int(day) if day is not None and day != "" else None,
+                ))
+            timetable.restrictions.all().delete()
+            SubjectPeriodRestriction.objects.bulk_create(rows)
+
+        year = self.get_academic_year()
+        valid_classes = {
+            item.id: item
+            for item in SchoolClass.objects.filter(academic_year=year)
+        }
+
+        valid_subjects = set(
+            Subject.objects.filter(school=self.get_school()).values_list("id", flat=True)
+        )
+
+        excluded_classes = request.data.get("excluded_classes")
+        if excluded_classes is not None:
+            prepared_exclusions = []
+            for item in excluded_classes:
+                subject_id = item.get("subject")
+                members = [
+                    class_id for class_id in dict.fromkeys(item.get("classes") or [])
+                    if class_id in valid_classes
+                ]
+                if subject_id not in valid_subjects or not members:
+                    continue
+                prepared_exclusions.append((subject_id, members))
+
+            timetable.excluded_classes.all().delete()
+            for subject_id, members in prepared_exclusions:
+                exclusion = ExcludedTimetableClass.objects.create(
+                    timetable=timetable, subject_id=subject_id,
+                )
+                exclusion.classes.set(members)
+
+        class_groups = request.data.get("class_groups")
+        if class_groups is not None:
+            prepared = []
+            for item in class_groups:
+                subject_id = item.get("subject")
+                members = [
+                    class_id for class_id in dict.fromkeys(item.get("classes") or [])
+                    if class_id in valid_classes
+                ]
+                if subject_id not in valid_subjects or len(members) < 2:
+                    continue
+
+                # Un regroupement n'a de sens que si un seul enseignant assure
+                # la matière dans toutes les classes réunies.
+                teachers = set()
+                for class_id in members:
+                    link = TeacherAssignmentSubject.objects.filter(
+                        class_subject__school_class_id=class_id,
+                        class_subject__subject_id=subject_id,
+                        assignment__academic_year=year,
+                    ).select_related("assignment").first()
+                    teachers.add(link.assignment.teacher_id if link else None)
+                if len(teachers) > 1:
+                    names = ", ".join(valid_classes[class_id].group for class_id in members)
+                    raise serializers.ValidationError({"class_groups": (
+                        f"Les classes {names} n’ont pas le même enseignant pour cette matière : "
+                        "elles ne peuvent pas être réunies."
+                    )})
+                prepared.append((subject_id, members))
+
+            timetable.class_groups.all().delete()
+            for subject_id, members in prepared:
+                group = ClassGroupSession.objects.create(timetable=timetable, subject_id=subject_id)
+                group.classes.set(members)
+
+        timetable.refresh_from_db()
+        return Response(self.serialize(timetable))
+
+
+class TimetableValidationView(TimetableMixin, APIView):
+    """Verrouille l'emploi du temps : une fois validé il n'est plus régénérable."""
+
+    def post(self, request, school_pk):
+        self.ensure_manager_access()
+        year = self.get_academic_year()
+        timetable = Timetable.objects.filter(school=self.get_school(), academic_year=year).first()
+        if not timetable:
+            raise serializers.ValidationError({"timetable": "Générez d’abord un emploi du temps."})
+        if timetable.is_validated:
+            raise serializers.ValidationError({"timetable": "Cet emploi du temps est déjà validé."})
+        timetable.status = Timetable.Status.VALIDATED
+        timetable.validated_at = timezone.now()
+        timetable.save(update_fields=["status", "validated_at"])
+        return Response(self.serialize(timetable))
+
+
+class TimetableExportView(TimetableMixin, APIView):
+    """Édition PDF de l'emploi du temps, par classe ou par enseignant.
+
+    Un enseignant sans droit de gestion peut éditer le sien, et seulement le
+    sien : c'est son propre planning, pas celui de l'établissement.
+    """
+
+    def get(self, request, school_pk):
+        year = self.get_academic_year()
+        timetable = Timetable.objects.filter(school=self.get_school(), academic_year=year).first()
+        if not timetable:
+            raise serializers.ValidationError({"timetable": "Aucun emploi du temps n’a été généré."})
+
+        scope = request.query_params.get("scope", "classes")
+        if scope == "teachers":
+            return self.export_teachers(request, timetable, year)
+        return self.export_classes(request, timetable, year)
+
+    def requested_ids(self, request):
+        """`?ids=3,7,12` — vide signifie « tout »."""
+        raw = (request.query_params.get("ids") or "").strip()
+        if not raw:
+            return None
+        return [int(value) for value in raw.split(",") if value.strip().isdigit()]
+
+    def export_classes(self, request, timetable, year):
+        self.ensure_manager_access()
+        classes = SchoolClass.objects.filter(academic_year=year).select_related("level")
+        identifiers = self.requested_ids(request)
+        if identifiers is not None:
+            classes = classes.filter(id__in=identifiers)
+        classes = list(classes.order_by("level__order", "group"))
+        if not classes:
+            raise serializers.ValidationError({"classes": "Aucune classe ne correspond à la sélection."})
+
+        content = class_timetables_pdf(timetable, classes)
+        name = classes[0].group if len(classes) == 1 else f"{len(classes)}-classes"
+        return self.as_attachment(content, f"emploi-du-temps-{slugify(name)}.pdf")
+
+    def export_teachers(self, request, timetable, year):
+        identifiers = self.requested_ids(request)
+        teachers = CustomUser.objects.filter(
+            id__in=timetable.slots.exclude(teacher=None).values_list("teacher_id", flat=True),
+        )
+        if identifiers is not None:
+            teachers = teachers.filter(id__in=identifiers)
+
+        # Hors gestionnaires, chacun n'a accès qu'à son propre emploi du temps.
+        if not self.can_manage():
+            teachers = teachers.filter(id=request.user.id)
+            if not teachers.exists():
+                raise serializers.ValidationError(
+                    {"permission": "Vous ne pouvez éditer que votre propre emploi du temps."}
+                )
+
+        teachers = list(teachers.order_by("last_name", "first_name"))
+        if not teachers:
+            raise serializers.ValidationError({"teachers": "Aucun enseignant ne correspond à la sélection."})
+
+        content = teacher_timetables_pdf(timetable, teachers)
+        name = teachers[0].get_full_name() if len(teachers) == 1 else f"{len(teachers)}-enseignants"
+        return self.as_attachment(content, f"emploi-du-temps-{slugify(name)}.pdf")
+
+    def as_attachment(self, content, filename):
+        response = HttpResponse(content, content_type="application/pdf")
+        response["Content-Disposition"] = f'attachment; filename="{filename}"'
+        return response
+
+
+class MyTimetableView(TimetableMixin, APIView):
+    """Emploi du temps consulté depuis l'espace personnel ou le calendrier.
+
+    Sans droit de gestion, chacun ne voit que ses propres cours. Les
+    gestionnaires peuvent demander la vue générale avec `?scope=all`.
+    """
+
+    def get(self, request, school_pk):
+        year = self.get_academic_year()
+        timetable = Timetable.objects.filter(school=self.get_school(), academic_year=year).first()
+        if not timetable:
+            return Response({"timetable": None, "slots": [], "periods": [], "scope": "mine"})
+
+        slots = timetable.slots.select_related(
+            "school_class", "school_class__level", "class_subject__subject", "teacher",
+        ).order_by("day", "start_time")
+
+        # La vue générale reste réservée aux gestionnaires ; les autres
+        # retombent sur leurs propres cours plutôt que sur une erreur.
+        scope = "all" if request.query_params.get("scope") == "all" and self.can_manage() else "mine"
+        if scope == "mine":
+            slots = slots.filter(teacher=request.user)
+
+        return Response({
+            "timetable": {
+                "id": timetable.id,
+                "is_validated": timetable.is_validated,
+                "days_per_week": timetable.days_per_week,
+            },
+            "scope": scope,
+            "can_manage": self.can_manage(),
+            "periods": [{
+                "id": period.id,
+                "label": period.label,
+                "kind": period.kind,
+                "start_time": period.start_time,
+                "end_time": period.end_time,
+                "order": period.order,
+            } for period in timetable.periods.all()],
+            "slots": [{
+                "id": slot.id,
+                "class_id": slot.school_class_id,
+                "class_name": slot.school_class.group,
+                "level": slot.school_class.level.name,
+                "subject": slot.class_subject.subject.name,
+                "teacher": slot.teacher.get_full_name() if slot.teacher else None,
+                "teacher_id": slot.teacher_id,
+                "day": slot.day,
+                "day_label": DAY_LABELS.get(slot.day, ""),
+                "start_time": slot.start_time,
+                "end_time": slot.end_time,
+            } for slot in slots],
+        })
+
+
+class ReportCardView(GradeMixin, APIView):
+    """Bulletins d'une classe pour une session : moyennes par matière, générale et rang."""
+
+    def get(self, request, school_pk, session_pk, class_pk):
+        self.ensure_grade_access()
+        year = self.get_academic_year()
+        try:
+            session = AcademicSession.objects.get(pk=session_pk, academic_year=year)
+            school_class = SchoolClass.objects.select_related("level").get(
+                pk=class_pk, academic_year=year, school=self.get_school(),
+            )
+        except (AcademicSession.DoesNotExist, SchoolClass.DoesNotExist):
+            raise serializers.ValidationError({"context": "Session ou classe invalide."})
+        if not session.classes.filter(pk=school_class.pk).exists():
+            raise serializers.ValidationError({"session": "Cette classe n’appartient pas à la session."})
+        try:
+            scheme = GradeScheme.objects.prefetch_related("lines", "groups__lines").get(session=session)
+        except GradeScheme.DoesNotExist:
+            raise serializers.ValidationError(
+                {"configuration": "Les lignes de notes ne sont pas configurées pour cette session."}
+            )
+
+        configurations = list(
+            ClassSubject.objects.filter(school_class=school_class).select_related("subject")
+        )
+        enrollments = list(
+            StudentEnrollment.objects.filter(
+                school_class=school_class, status=StudentEnrollment.Status.ACTIVE,
+            ).select_related("student").order_by("student__last_name", "student__first_name")
+        )
+        entries = GradeEntry.objects.filter(
+            line__scheme=scheme, class_subject__school_class=school_class,
+        )
+        entry_map = {}
+        for entry in entries:
+            entry_map.setdefault((entry.enrollment_id, entry.class_subject_id), {})[entry.line_id] = entry.score
+
+        lines = list(scheme.lines.all())
+        students = []
+        for enrollment in enrollments:
+            subject_rows = []
+            weighted_total = Decimal("0")
+            coefficient_total = Decimal("0")
+            for configuration in configurations:
+                scores = entry_map.get((enrollment.id, configuration.id), {})
+                average = (
+                    GradeSheetView.calculate_average(scheme, scores)
+                    if len(scores) == len(lines) and lines else None
+                )
+                if average is not None:
+                    weighted_total += average * configuration.coefficient
+                    coefficient_total += configuration.coefficient
+                subject_rows.append({
+                    "class_subject_id": configuration.id,
+                    "subject": configuration.subject.name,
+                    "coefficient": configuration.coefficient,
+                    "weekly_hours": configuration.weekly_hours,
+                    "average": average.quantize(Decimal("0.01")) if average is not None else None,
+                })
+            general = (weighted_total / coefficient_total).quantize(Decimal("0.01")) if coefficient_total else None
+            students.append({
+                "enrollment_id": enrollment.id,
+                "matricule": enrollment.enrollment_number,
+                "student_name": enrollment.student.get_full_name(),
+                "subjects": subject_rows,
+                "general_average": general,
+                "rank": None,
+            })
+
+        # Rang : à moyenne égale, même rang ; les rangs suivants sont décalés.
+        ranked = sorted(
+            [student for student in students if student["general_average"] is not None],
+            key=lambda student: student["general_average"], reverse=True,
+        )
+        previous_average = None
+        previous_rank = 0
+        for position, student in enumerate(ranked, start=1):
+            if student["general_average"] == previous_average:
+                student["rank"] = previous_rank
+            else:
+                student["rank"] = position
+                previous_rank = position
+                previous_average = student["general_average"]
+
+        graded = [student["general_average"] for student in students if student["general_average"] is not None]
+        return Response({
+            "session": {"id": session.id, "name": session.name, "label": session.label},
+            "school_class": {
+                "id": school_class.id,
+                "name": " ".join(part for part in (school_class.level.name, school_class.series, school_class.group) if part),
+                "group": school_class.group,
+            },
+            "students": students,
+            "statistics": {
+                "students_total": len(students),
+                "students_graded": len(graded),
+                "class_average": (sum(graded) / len(graded)).quantize(Decimal("0.01")) if graded else None,
+                "highest": max(graded).quantize(Decimal("0.01")) if graded else None,
+                "lowest": min(graded).quantize(Decimal("0.01")) if graded else None,
+                "pass_count": sum(1 for average in graded if average >= Decimal("10")),
+            },
+        })
+
+
+# Champs de l'école imprimés en tête du bulletin. Une seule liste : la vue de
+# paramétrage et l'export PDF y puisent, sans risque d'en oublier un.
+REPORT_HEADER_FIELDS = (
+    "country", "country_motto", "ministry", "cabinet", "general_secretariat",
+    "education_direction", "direction_city", "inspection",
+    "motto", "phone", "postal_box", "city",
+)
+
+
+def report_header(school):
+    payload = {field: getattr(school, field) for field in REPORT_HEADER_FIELDS}
+    payload["name"] = school.name
+    # Repris par le filigrane, qui imprime au choix le nom ou le code.
+    payload["code"] = school.code
+    # Le paramétrage grise le filigrane « logo » tant qu'aucun logo n'est chargé.
+    payload["logo"] = bool(school.logo)
+    return payload
+
+
+class ReportCardSettingsView(GradeMixin, APIView):
+    """Mise en forme des bulletins et seuils d'appréciation, par école."""
+
+    FIELDS = (
+        "show_score_detail", "group_by_category", "show_rank", "show_teacher",
+        "show_appreciation", "show_class_statistics",
+    )
+
+    def serialize(self, school):
+        configuration = settings_for(school)
+        return {
+            **{field: getattr(configuration, field) for field in self.FIELDS},
+            "template": configuration.template,
+            "templates": [
+                {"value": value, "label": label}
+                for value, label in ReportCardSettings.Template.choices
+            ],
+            # Les filigranes se cumulent : c'est une liste, pas un choix unique.
+            "watermarks": configuration.active_watermarks,
+            "watermark_density": configuration.watermark_density,
+            "watermark_source": configuration.watermark_source,
+            # Tant que c'est faux, les valeurs affichées sont celles d'usage.
+            "is_configured": configuration.configured_at is not None,
+            "watermark_choices": [
+                {"value": value, "label": label}
+                for value, label in ReportCardSettings.Watermark.choices
+                if value != ReportCardSettings.Watermark.NONE
+            ],
+            "watermark_densities": [
+                {"value": value, "label": label}
+                for value, label in ReportCardSettings.WatermarkDensity.choices
+            ],
+            "watermark_sources": [
+                {"value": value, "label": label}
+                for value, label in ReportCardSettings.WatermarkSource.choices
+            ],
+            "council_note": configuration.council_note,
+            "appreciations": [
+                {"id": row.id, "label": row.label, "minimum": str(row.minimum)}
+                for row in appreciations_for(school)
+            ],
+            "category_orders": [
+                {
+                    "id": rule.id,
+                    "name": rule.name,
+                    "scope": rule.scope,
+                    "scope_label": rule.get_scope_display(),
+                    "stage": rule.stage,
+                    "series": rule.series,
+                    "classes": [item.id for item in rule.classes.all()],
+                    "class_names": [item.group for item in rule.classes.all()],
+                    "categories": rule.categories or [],
+                }
+                for rule in SubjectCategoryOrder.objects.filter(school=school).prefetch_related("classes")
+            ],
+            "categories": [
+                {"id": row.id, "name": row.name}
+                for row in SubjectCategory.objects.filter(school=school)
+            ],
+            "stages": [
+                {"value": value, "label": label}
+                for value, label in SchoolLevel.Stage.choices
+            ],
+            # `distinct()` ne suffit pas : l'ordonnancement par défaut de
+            # SchoolClass ajoute ses colonnes au SELECT et rend les lignes
+            # uniques. On dédoublonne donc en Python.
+            "series": sorted(set(
+                SchoolClass.objects.filter(school=school, is_active=True)
+                .exclude(series="").values_list("series", flat=True)
+            )),
+            "school": report_header(school),
+            "can_configure": self.can_configure_grades(),
+        }
+
+    def get(self, request, school_pk):
+        self.ensure_grade_access()
+        return Response(self.serialize(self.get_school()))
+
+    @transaction.atomic
+    def put(self, request, school_pk):
+        if not self.can_configure_grades():
+            raise serializers.ValidationError(
+                {"permission": "Seuls le propriétaire, l’administrateur, le censeur ou le proviseur peuvent configurer les bulletins."}
+            )
+        school = self.get_school()
+        configuration = settings_for(school)
+        for field in self.FIELDS:
+            if field in request.data:
+                setattr(configuration, field, bool(request.data[field]))
+        if "council_note" in request.data:
+            configuration.council_note = str(request.data["council_note"])[:2000]
+        # Champs à choix fermé : une valeur inconnue est refusée plutôt
+        # qu'enregistrée telle quelle, sinon l'édition PDF retomberait
+        # silencieusement sur son défaut.
+        choice_fields = (
+            ("template", ReportCardSettings.Template, "Modèle de bulletin inconnu."),
+            ("watermark_density", ReportCardSettings.WatermarkDensity, "Densité de mosaïque inconnue."),
+            ("watermark_source", ReportCardSettings.WatermarkSource, "Texte de filigrane inconnu."),
+        )
+        for field, choices, message in choice_fields:
+            if field in request.data:
+                value = str(request.data[field])
+                if value not in dict(choices.choices):
+                    raise serializers.ValidationError({field: message})
+                setattr(configuration, field, value)
+
+        # Les filigranes se combinent : on enregistre une liste, dédoublonnée
+        # et purgée de « aucun », qui ne veut rien dire à côté d'un autre.
+        if "watermarks" in request.data:
+            chosen = request.data["watermarks"]
+            if not isinstance(chosen, list):
+                raise serializers.ValidationError(
+                    {"watermarks": "Les filigranes doivent être envoyés sous forme de liste."}
+                )
+            known = dict(ReportCardSettings.Watermark.choices)
+            kinds = []
+            for item in chosen:
+                value = str(item)
+                if value not in known:
+                    raise serializers.ValidationError({"watermarks": "Filigrane inconnu."})
+                if value != ReportCardSettings.Watermark.NONE and value not in kinds:
+                    kinds.append(value)
+            configuration.watermarks = kinds
+            # L'ancien champ suit, pour les lectures qui n'ont pas migré.
+            configuration.watermark = kinds[0] if kinds else ReportCardSettings.Watermark.NONE
+        # Marque le paramétrage comme réglé à la main : à partir d'ici, aucune
+        # valeur d'usage ne vient plus le compléter dans le dos de l'école.
+        if configuration.configured_at is None:
+            configuration.configured_at = timezone.now()
+        configuration.save()
+
+        # Coordonnées imprimées en tête du bulletin.
+        details = request.data.get("school") or {}
+        touched = [field for field in REPORT_HEADER_FIELDS if field in details]
+        for field in touched:
+            # Chaque champ a sa propre longueur : tronquer à une valeur commune
+            # écourterait les uns et ferait échouer l'écriture des autres.
+            limit = School._meta.get_field(field).max_length
+            setattr(school, field, str(details[field]).strip()[:limit])
+        if touched:
+            school.save(update_fields=touched)
+
+        appreciations = request.data.get("appreciations")
+        if appreciations is not None:
+            rows = []
+            for item in appreciations:
+                label = str(item.get("label", "")).strip()
+                if not label:
+                    continue
+                try:
+                    minimum = Decimal(str(item.get("minimum")))
+                except (TypeError, ArithmeticError):
+                    raise serializers.ValidationError(
+                        {"appreciations": f"Seuil invalide pour « {label} »."}
+                    )
+                if not Decimal("0") <= minimum <= Decimal("20"):
+                    raise serializers.ValidationError(
+                        {"appreciations": f"Le seuil de « {label} » doit être compris entre 0 et 20."}
+                    )
+                rows.append((label, minimum))
+
+            labels = [label for label, _ in rows]
+            if len(labels) != len(set(labels)):
+                raise serializers.ValidationError(
+                    {"appreciations": "Deux appréciations portent le même libellé."}
+                )
+            ReportCardAppreciation.objects.filter(school=school).delete()
+            ReportCardAppreciation.objects.bulk_create([
+                ReportCardAppreciation(school=school, label=label, minimum=minimum)
+                for label, minimum in rows
+            ])
+
+        category_orders = request.data.get("category_orders")
+        if category_orders is not None:
+            valid_categories = set(
+                SubjectCategory.objects.filter(school=school).values_list("name", flat=True)
+            )
+            valid_classes = set(
+                SchoolClass.objects.filter(school=school).values_list("id", flat=True)
+            )
+            valid_stages = {value for value, _ in SchoolLevel.Stage.choices}
+
+            prepared = []
+            for item in category_orders:
+                scope = item.get("scope", SubjectCategoryOrder.Scope.SCHOOL)
+                if scope not in dict(SubjectCategoryOrder.Scope.choices):
+                    raise serializers.ValidationError({"category_orders": "Portée inconnue."})
+
+                stage = str(item.get("stage") or "")
+                if scope == SubjectCategoryOrder.Scope.STAGE and stage not in valid_stages:
+                    raise serializers.ValidationError({"category_orders": "Cycle invalide."})
+
+                series = str(item.get("series") or "").strip()
+                if scope == SubjectCategoryOrder.Scope.SERIES and not series:
+                    raise serializers.ValidationError({"category_orders": "Indiquez une série."})
+
+                members = [
+                    class_id for class_id in dict.fromkeys(item.get("classes") or [])
+                    if class_id in valid_classes
+                ]
+                if scope == SubjectCategoryOrder.Scope.CLASSES and not members:
+                    raise serializers.ValidationError(
+                        {"category_orders": "Choisissez au moins une classe."}
+                    )
+
+                # Un type disparu de l'école ne doit pas figer un ordre obsolète.
+                ordered = [
+                    str(name) for name in (item.get("categories") or [])
+                    if str(name) in valid_categories
+                ]
+                prepared.append((item.get("name", ""), scope, stage, series, members, ordered))
+
+            SubjectCategoryOrder.objects.filter(school=school).delete()
+            for name, scope, stage, series, members, ordered in prepared:
+                rule = SubjectCategoryOrder.objects.create(
+                    school=school, name=str(name)[:80], scope=scope,
+                    stage=stage if scope == SubjectCategoryOrder.Scope.STAGE else "",
+                    series=series if scope == SubjectCategoryOrder.Scope.SERIES else "",
+                    categories=ordered,
+                )
+                if scope == SubjectCategoryOrder.Scope.CLASSES:
+                    rule.classes.set(members)
+
+        return Response(self.serialize(school))
+
+
+class ReportCardGenerationView(GradeMixin, APIView):
+    """Génère les bulletins d'une session : établissement, classe ou élève.
+
+    Une session déjà générée refuse une nouvelle génération globale ; seules
+    les corrections ciblées (une classe, un élève) restent possibles.
+    """
+
+    def get_session(self, session_pk):
+        year = self.get_academic_year()
+        try:
+            return AcademicSession.objects.get(pk=session_pk, academic_year=year)
+        except AcademicSession.DoesNotExist:
+            raise serializers.ValidationError({"session": "Session invalide."})
+
+    def get(self, request, school_pk, session_pk):
+        """État de génération : combien de bulletins, quelles classes."""
+        self.ensure_grade_access()
+        session = self.get_session(session_pk)
+        school = self.get_school()
+        cards = ReportCard.objects.filter(session=session, school_class__school=school)
+        per_class = {}
+        for card in cards.select_related("school_class", "school_class__level"):
+            entry = per_class.setdefault(card.school_class_id, {
+                "id": card.school_class_id,
+                "name": card.school_class.group,
+                "level": card.school_class.level.name,
+                "count": 0,
+                "generated_at": None,
+            })
+            entry["count"] += 1
+            stamp = card.generated_at.isoformat()
+            if entry["generated_at"] is None or stamp > entry["generated_at"]:
+                entry["generated_at"] = stamp
+
+        return Response({
+            "session": {"id": session.id, "name": session.name, "label": session.label},
+            "generated": cards.exists(),
+            "total": cards.count(),
+            "classes": sorted(per_class.values(), key=lambda row: row["name"]),
+            "can_configure": self.can_configure_grades(),
+        })
+
+    def post(self, request, school_pk, session_pk):
+        if not self.can_configure_grades():
+            raise serializers.ValidationError(
+                {"permission": "Seuls le propriétaire, l’administrateur, le censeur ou le proviseur peuvent générer les bulletins."}
+            )
+        session = self.get_session(session_pk)
+        school = self.get_school()
+        scope = request.data.get("scope", "school")
+
+        try:
+            if scope == "school":
+                if ReportCard.objects.filter(session=session, school_class__school=school).exists():
+                    raise serializers.ValidationError({"scope": (
+                        "Les bulletins de cette session sont déjà générés. "
+                        "Corrigez une classe ou un élève plutôt que de tout régénérer."
+                    )})
+                written, classes = generate_school(session, school, user=request.user)
+                message = f"{written} bulletin(s) générés pour {classes} classe(s)."
+
+            elif scope == "class":
+                school_class = self.get_class(session, request.data.get("school_class"))
+                written = generate_class(session, school_class, user=request.user)
+                message = f"{written} bulletin(s) régénérés pour {school_class.group}."
+
+            elif scope == "student":
+                enrollment = self.get_enrollment(session, request.data.get("enrollment"))
+                written = generate_class(
+                    session, enrollment.school_class, user=request.user,
+                    enrollment_ids={enrollment.id},
+                )
+                message = f"Bulletin régénéré pour {enrollment.student.get_full_name()}."
+
+            else:
+                raise serializers.ValidationError({"scope": "Portée inconnue."})
+        except ValueError as issue:
+            raise serializers.ValidationError({"configuration": str(issue)})
+
+        return Response({"detail": message, "written": written})
+
+    def get_class(self, session, class_id):
+        try:
+            school_class = SchoolClass.objects.select_related("level").get(
+                pk=class_id, school=self.get_school(), academic_year=session.academic_year,
+            )
+        except (SchoolClass.DoesNotExist, ValueError, TypeError):
+            raise serializers.ValidationError({"school_class": "Classe invalide."})
+        if not session.classes.filter(pk=school_class.pk).exists():
+            raise serializers.ValidationError(
+                {"school_class": "Cette classe n’appartient pas à la session."}
+            )
+        return school_class
+
+    def get_enrollment(self, session, enrollment_id):
+        try:
+            enrollment = StudentEnrollment.objects.select_related(
+                "student", "school_class",
+            ).get(pk=enrollment_id, school_class__school=self.get_school())
+        except (StudentEnrollment.DoesNotExist, ValueError, TypeError):
+            raise serializers.ValidationError({"enrollment": "Élève invalide."})
+        if not session.classes.filter(pk=enrollment.school_class_id).exists():
+            raise serializers.ValidationError(
+                {"enrollment": "Cet élève n’appartient pas à une classe de la session."}
+            )
+        return enrollment
+
+
+class ReportCardExportView(GradeMixin, APIView):
+    """Édite en PDF les bulletins figés : établissement, classe ou élève."""
+
+    def get(self, request, school_pk, session_pk):
+        self.ensure_grade_access()
+        year = self.get_academic_year()
+        school = self.get_school()
+        try:
+            session = AcademicSession.objects.get(pk=session_pk, academic_year=year)
+        except AcademicSession.DoesNotExist:
+            raise serializers.ValidationError({"session": "Session invalide."})
+
+        cards = ReportCard.objects.filter(
+            session=session, school_class__school=school,
+        ).select_related("school_class", "school_class__level", "enrollment__student")
+
+        scope = request.query_params.get("scope", "school")
+        if scope == "class":
+            cards = cards.filter(school_class_id=request.query_params.get("school_class"))
+            label = "classe"
+        elif scope == "student":
+            cards = cards.filter(enrollment_id=request.query_params.get("enrollment"))
+            label = "eleve"
+        else:
+            label = school.code
+
+        cards = list(cards.order_by("school_class__group", "rank"))
+        if not cards:
+            raise serializers.ValidationError(
+                {"report_cards": "Aucun bulletin généré pour cette sélection."}
+            )
+
+        configuration = settings_for(school)
+        options = {
+            "template": configuration.template,
+            "watermarks": configuration.active_watermarks,
+            "watermark_density": configuration.watermark_density,
+            "watermark_source": configuration.watermark_source,
+            "show_score_detail": configuration.show_score_detail,
+            "show_rank": configuration.show_rank,
+            "show_teacher": configuration.show_teacher,
+            "show_appreciation": configuration.show_appreciation,
+            "show_class_statistics": configuration.show_class_statistics,
+            "council_note": configuration.council_note,
+        }
+
+        # Le récapitulatif reprend les sessions déjà éditées de l'année. La
+        # séquence est propre à chaque classe — une année peut mêler classes en
+        # trimestres et classes en semestres — d'où un historique par classe.
+        histories = {}
+        for school_class in {card.school_class for card in cards}:
+            enrollment_ids = [
+                card.enrollment_id for card in cards
+                if card.school_class_id == school_class.id
+            ]
+            histories[school_class.id] = term_history(session, school_class, enrollment_ids)
+
+        payloads = []
+        for card in cards:
+            payload = dict(card.payload or {})
+            payload["class_name"] = " ".join(
+                part for part in (card.school_class.level.name, card.school_class.series,
+                                  card.school_class.group) if part
+            )
+            payload["history"] = student_history(
+                histories[card.school_class_id], card.enrollment_id,
+            )
+            payloads.append(payload)
+
+        content = report_cards_pdf(
+            payloads,
+            school=report_header(school),
+            session={"id": session.id, "name": session.name, "label": session.label},
+            year_name=year.name,
+            options=options,
+            logo_path=school.logo.path if school.logo else None,
+        )
+
+        if scope == "student":
+            label = slugify(cards[0].enrollment.student.get_full_name())
+        elif scope == "class":
+            label = slugify(cards[0].school_class.group)
+
+        response = HttpResponse(content, content_type="application/pdf")
+        response["Content-Disposition"] = f'attachment; filename="bulletins-{slugify(label)}.pdf"'
+        return response

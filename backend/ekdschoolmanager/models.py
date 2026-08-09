@@ -1,3 +1,5 @@
+from datetime import time
+
 from django.contrib.auth.models import AbstractUser
 from django.core.exceptions import ValidationError
 from django.db import models
@@ -8,6 +10,7 @@ from django.dispatch import receiver
 
 class CustomUser(AbstractUser):
     class Role(models.TextChoices):
+        SUPERUSER = "superuser", "Superutilisateur"
         ADMIN = "admin", "Administrateur"
         OWNER = "proprietaire", "Propriétaire"
         TEACHER = "enseignant", "Enseignant"
@@ -49,6 +52,7 @@ class CustomUser(AbstractUser):
     date_of_birth = models.DateField("date de naissance", null=True, blank=True)
     address = models.TextField("adresse", blank=True)
     health_information = models.TextField("allergies et soucis de santé", blank=True)
+    signature = models.ImageField("signature", upload_to="personnel/signatures/", null=True, blank=True)
     enrollment_number = models.CharField("numéro matricule", max_length=50, null=True, blank=True)
     student_status = models.CharField(
         "statut de l’élève", max_length=12, choices=StudentStatus.choices,
@@ -82,6 +86,25 @@ class School(models.Model):
         related_name="owned_schools",
         verbose_name="propriétaire",
     )
+    # Coordonnées imprimées en tête des bulletins.
+    country = models.CharField("pays", max_length=120, blank=True, default="RÉPUBLIQUE TOGOLAISE")
+    country_motto = models.CharField(
+        "devise nationale", max_length=160, blank=True, default="Travail — Liberté — Patrie",
+    )
+    ministry = models.CharField(
+        "ministère", max_length=200, blank=True,
+        default="MINISTÈRE DE L’ÉDUCATION NATIONALE",
+    )
+    motto = models.CharField("devise", max_length=120, blank=True)
+    phone = models.CharField("téléphone", max_length=80, blank=True)
+    postal_box = models.CharField("boîte postale", max_length=80, blank=True)
+    city = models.CharField("ville", max_length=80, blank=True)
+    cabinet = models.CharField("cabinet", max_length=160, blank=True)
+    general_secretariat = models.CharField("secrétariat général", max_length=160, blank=True)
+    education_direction = models.CharField("direction régionale", max_length=160, blank=True)
+    # Ville de la direction régionale : « Atakpamé » sous « Plateaux-Est ».
+    direction_city = models.CharField("ville de la direction", max_length=80, blank=True)
+    inspection = models.CharField("inspection", max_length=160, blank=True)
     is_active = models.BooleanField("active", default=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -113,10 +136,33 @@ class SchoolMembership(models.Model):
         return f"{self.user} — {self.school}"
 
 
+class SubjectCategory(models.Model):
+    """Type de matière défini par l'établissement (facultative, littéraire, scientifique…)."""
+
+    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name="subject_categories")
+    name = models.CharField("nom", max_length=80)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["name"]
+        constraints = [
+            models.UniqueConstraint(fields=["school", "name"], name="unique_subject_category_per_school"),
+        ]
+        verbose_name = "type de matière"
+        verbose_name_plural = "types de matières"
+
+    def __str__(self):
+        return f"{self.name} — {self.school.name}"
+
+
 class Subject(models.Model):
     school = models.ForeignKey(School, on_delete=models.CASCADE, related_name="subjects")
     name = models.CharField("nom", max_length=120)
     code = models.SlugField("code", max_length=40)
+    category = models.ForeignKey(
+        SubjectCategory, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="subjects", verbose_name="type de matière",
+    )
     description = models.TextField("description", blank=True)
     is_active = models.BooleanField("active", default=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -429,6 +475,160 @@ class StudentEnrollment(models.Model):
             raise ValidationError({"school_class": "Cette classe ne correspond pas à l’école, l’année et au niveau sélectionnés."})
 
 
+class AttendanceSession(models.Model):
+    """Un appel : une classe, un jour, éventuellement une matière.
+
+    L'appel est le relevé, la ligne `AttendanceRecord` en est le détail élève.
+    Séparer les deux permet de savoir qu'un appel a bien été fait même si
+    personne n'était absent — une classe sans ligne d'absence et une classe
+    dont l'appel n'a jamais été fait ne se confondent pas.
+    """
+
+    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name="attendance_sessions")
+    academic_year = models.ForeignKey(
+        AcademicYear, on_delete=models.CASCADE, related_name="attendance_sessions",
+    )
+    school_class = models.ForeignKey(
+        SchoolClass, on_delete=models.CASCADE, related_name="attendance_sessions",
+    )
+    # Matière facultative : au primaire l'appel est journalier, au secondaire
+    # il se fait souvent cours par cours.
+    class_subject = models.ForeignKey(
+        ClassSubject, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="attendance_sessions", verbose_name="matière",
+    )
+    taken_on = models.DateField("date de l’appel")
+    period = models.CharField(
+        "créneau", max_length=40, blank=True,
+        help_text="Créneau horaire ou moment de la journée, libre.",
+    )
+    taken_by = models.ForeignKey(
+        CustomUser, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="taken_attendance_sessions", verbose_name="fait par",
+    )
+    note = models.TextField("observation", blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-taken_on", "school_class__group"]
+        constraints = [
+            # Un seul appel par classe, par jour et par créneau : refaire
+            # l'appel corrige le relevé existant au lieu de le dédoubler.
+            models.UniqueConstraint(
+                fields=["school_class", "taken_on", "class_subject", "period"],
+                name="unique_attendance_session_per_slot",
+            ),
+        ]
+        verbose_name = "appel"
+        verbose_name_plural = "appels"
+
+    def __str__(self):
+        return f"Appel {self.school_class.group} — {self.taken_on:%d/%m/%Y}"
+
+    def clean(self):
+        super().clean()
+        if self.school_class_id and (
+            self.school_class.school_id != self.school_id
+            or self.school_class.academic_year_id != self.academic_year_id
+        ):
+            raise ValidationError(
+                {"school_class": "Cette classe ne correspond pas à l’école et à l’année sélectionnées."}
+            )
+        if self.class_subject_id and self.class_subject.school_class_id != self.school_class_id:
+            raise ValidationError({"class_subject": "Cette matière n’est pas enseignée dans cette classe."})
+
+
+class AttendanceRecord(models.Model):
+    """Présence d'un élève à un appel."""
+
+    class Status(models.TextChoices):
+        PRESENT = "present", "Présent"
+        ABSENT = "absent", "Absent"
+        LATE = "retard", "En retard"
+        EXCUSED = "excuse", "Absence justifiée"
+
+    session = models.ForeignKey(
+        AttendanceSession, on_delete=models.CASCADE, related_name="records",
+    )
+    enrollment = models.ForeignKey(
+        StudentEnrollment, on_delete=models.CASCADE, related_name="attendance_records",
+    )
+    status = models.CharField(
+        "statut", max_length=10, choices=Status.choices, default=Status.PRESENT,
+    )
+    minutes_late = models.PositiveSmallIntegerField("minutes de retard", default=0)
+    comment = models.CharField("motif", max_length=200, blank=True)
+
+    class Meta:
+        ordering = ["enrollment__student__last_name", "enrollment__student__first_name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["session", "enrollment"], name="unique_attendance_per_student",
+            ),
+        ]
+        verbose_name = "présence"
+        verbose_name_plural = "présences"
+
+    def __str__(self):
+        return f"{self.enrollment} — {self.get_status_display()}"
+
+
+class DisciplineRecord(models.Model):
+    class EntryType(models.TextChoices):
+        LATE = "retard", "Retard"
+        ABSENCE = "absence", "Absence"
+        INCIDENT = "incident", "Incident"
+
+    class Severity(models.TextChoices):
+        LOW = "leger", "Léger"
+        MEDIUM = "moyen", "Moyen"
+        HIGH = "grave", "Grave"
+
+    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name="discipline_records")
+    academic_year = models.ForeignKey(AcademicYear, on_delete=models.CASCADE, related_name="discipline_records")
+    enrollment = models.ForeignKey(StudentEnrollment, on_delete=models.CASCADE, related_name="discipline_records")
+    entry_type = models.CharField("type", max_length=12, choices=EntryType.choices)
+    occurred_on = models.DateField("date")
+    late_hours = models.DecimalField("heures de retard", max_digits=5, decimal_places=2, default=0)
+    incident_type = models.CharField("type d’incident", max_length=120, blank=True)
+    severity = models.CharField("gravité", max_length=12, choices=Severity.choices, blank=True)
+    description = models.TextField("description", blank=True)
+    action_taken = models.TextField("mesure prise", blank=True)
+    recorded_by = models.ForeignKey(
+        CustomUser, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="recorded_discipline_records",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-occurred_on", "-created_at"]
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(late_hours__gte=0),
+                name="discipline_record_late_hours_positive",
+            ),
+        ]
+        verbose_name = "entrée de discipline"
+        verbose_name_plural = "entrées de discipline"
+
+    def __str__(self):
+        return f"{self.get_entry_type_display()} — {self.enrollment}"
+
+    def clean(self):
+        super().clean()
+        if self.enrollment_id and (
+            self.enrollment.school_id != self.school_id
+            or self.enrollment.academic_year_id != self.academic_year_id
+        ):
+            raise ValidationError({"enrollment": "Cette inscription ne correspond pas à l’école et à l’année sélectionnées."})
+        if self.entry_type in {self.EntryType.LATE, self.EntryType.ABSENCE} and self.late_hours <= 0:
+            raise ValidationError({"late_hours": "Saisissez un nombre d’heures supérieur à 0."})
+        if self.entry_type == self.EntryType.INCIDENT and not self.incident_type.strip():
+            raise ValidationError({"incident_type": "Précisez le type d’incident."})
+
+
 class TuitionFeePlan(models.Model):
     school = models.ForeignKey(School, on_delete=models.CASCADE, related_name="tuition_fee_plans")
     academic_year = models.ForeignKey(AcademicYear, on_delete=models.CASCADE, related_name="tuition_fee_plans")
@@ -609,3 +809,446 @@ class GradeEntry(models.Model):
             models.UniqueConstraint(fields=["line", "enrollment", "class_subject"], name="unique_grade_entry"),
             models.CheckConstraint(condition=Q(score__gte=0), name="grade_entry_score_non_negative"),
         ]
+
+
+class Timetable(models.Model):
+    class Status(models.TextChoices):
+        DRAFT = "brouillon", "Brouillon"
+        VALIDATED = "valide", "Validé"
+
+    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name="timetables")
+    academic_year = models.ForeignKey(AcademicYear, on_delete=models.CASCADE, related_name="timetables")
+    status = models.CharField("statut", max_length=12, choices=Status.choices, default=Status.DRAFT)
+    days_per_week = models.PositiveSmallIntegerField("jours par semaine", default=5)
+    period_duration = models.PositiveSmallIntegerField("durée d’un créneau (minutes)", default=60)
+    morning_start = models.TimeField("début de la matinée", default=time(7, 0))
+    morning_end = models.TimeField("fin de la matinée", default=time(12, 0))
+    afternoon_start = models.TimeField("début de l’après-midi", default=time(15, 0))
+    afternoon_end = models.TimeField("fin de l’après-midi", default=time(18, 0))
+
+    # Contraintes pédagogiques activables individuellement par l'utilisateur.
+    enforce_paired_hours = models.BooleanField(
+        "regrouper les heures par blocs de 2h (lycée)", default=True,
+    )
+    enforce_single_hour_middle = models.BooleanField(
+        "1h par jour au collège", default=True,
+    )
+    enforce_day_spacing = models.BooleanField(
+        "espacer d’au moins un jour les deux premières séances", default=True,
+    )
+    enforce_max_two_hours = models.BooleanField(
+        "jamais plus de 2h d’une matière le même jour", default=True,
+    )
+    skip_primary = models.BooleanField(
+        "ne pas générer pour le cycle primaire", default=True,
+    )
+    days_without_afternoon = models.JSONField(
+        "jours sans cours l’après-midi", default=list, blank=True,
+        help_text="Indices des jours (0 = lundi) où les créneaux d’après-midi restent vides.",
+    )
+
+    generated_by = models.ForeignKey(CustomUser, on_delete=models.PROTECT, related_name="generated_timetables")
+    generated_at = models.DateTimeField(auto_now_add=True)
+    validated_at = models.DateTimeField("validé le", null=True, blank=True)
+
+    class Meta:
+        ordering = ["-generated_at"]
+        constraints = [
+            # Un seul emploi du temps par école et par année académique.
+            models.UniqueConstraint(fields=["school", "academic_year"], name="unique_timetable_per_school_year"),
+        ]
+        verbose_name = "emploi du temps"
+        verbose_name_plural = "emplois du temps"
+
+    def __str__(self):
+        return f"Emploi du temps {self.academic_year.name} — {self.school.name}"
+
+    @property
+    def is_validated(self):
+        return self.status == self.Status.VALIDATED
+
+
+class TimetablePeriod(models.Model):
+    """Créneau horaire de la grille hebdomadaire.
+
+    Les créneaux de pause ne reçoivent aucun cours et coupent la continuité :
+    deux heures séparées par une pause ne forment jamais un bloc de 2h.
+    """
+
+    class Kind(models.TextChoices):
+        COURSE = "cours", "Cours"
+        BREAK = "pause", "Pause"
+
+    timetable = models.ForeignKey(Timetable, on_delete=models.CASCADE, related_name="periods")
+    label = models.CharField("libellé", max_length=60, blank=True)
+    kind = models.CharField("type", max_length=8, choices=Kind.choices, default=Kind.COURSE)
+    start_time = models.TimeField("heure de début")
+    end_time = models.TimeField("heure de fin")
+    order = models.PositiveSmallIntegerField("ordre")
+
+    class Meta:
+        ordering = ["order"]
+        constraints = [
+            models.UniqueConstraint(fields=["timetable", "order"], name="unique_period_order_per_timetable"),
+            models.UniqueConstraint(fields=["timetable", "start_time"], name="unique_period_start_per_timetable"),
+            models.CheckConstraint(condition=Q(end_time__gt=F("start_time")), name="timetable_period_end_after_start"),
+        ]
+        verbose_name = "créneau horaire"
+        verbose_name_plural = "créneaux horaires"
+
+    def __str__(self):
+        return f"{self.start_time:%H:%M}-{self.end_time:%H:%M} ({self.get_kind_display()})"
+
+    @property
+    def is_break(self):
+        return self.kind == self.Kind.BREAK
+
+
+class ExcludedTimetableClass(models.Model):
+    """Classes écartées de la génération, matière par matière.
+
+    L'exclusion porte sur un couple (matière, classe) : les autres matières de
+    la classe restent programmées normalement.
+    """
+
+    timetable = models.ForeignKey(Timetable, on_delete=models.CASCADE, related_name="excluded_classes")
+    subject = models.ForeignKey(Subject, on_delete=models.CASCADE, related_name="timetable_exclusions")
+    classes = models.ManyToManyField(
+        SchoolClass, related_name="timetable_exclusions", verbose_name="classes exclues",
+    )
+
+    class Meta:
+        ordering = ["subject__name"]
+        constraints = [
+            models.UniqueConstraint(fields=["timetable", "subject"], name="unique_excluded_subject_per_timetable"),
+        ]
+        verbose_name = "exclusion de matière"
+        verbose_name_plural = "exclusions de matière"
+
+    def __str__(self):
+        return f"{self.subject.name} exclue pour {self.classes.count()} classe(s)"
+
+
+class ClassGroupSession(models.Model):
+    """Classes réunies pour suivre une matière ensemble, au même créneau.
+
+    Le regroupement n'est possible que si toutes les classes ont le même
+    enseignant pour cette matière — sinon deux professeurs devraient assurer
+    le même cours au même moment.
+    """
+
+    timetable = models.ForeignKey(Timetable, on_delete=models.CASCADE, related_name="class_groups")
+    subject = models.ForeignKey(Subject, on_delete=models.CASCADE, related_name="class_groups")
+    classes = models.ManyToManyField(
+        SchoolClass, related_name="timetable_groups", verbose_name="classes réunies",
+    )
+
+    class Meta:
+        ordering = ["subject__name"]
+        verbose_name = "regroupement de classes"
+        verbose_name_plural = "regroupements de classes"
+
+    def __str__(self):
+        groups = ", ".join(item.group for item in self.classes.all())
+        return f"{self.subject.name} — {groups}"
+
+
+class SubjectPeriodRestriction(models.Model):
+    """Interdit de programmer une matière sur un créneau (et éventuellement un jour) donné."""
+
+    timetable = models.ForeignKey(Timetable, on_delete=models.CASCADE, related_name="restrictions")
+    subject = models.ForeignKey(Subject, on_delete=models.CASCADE, related_name="period_restrictions")
+    period = models.ForeignKey(TimetablePeriod, on_delete=models.CASCADE, related_name="restrictions")
+    day = models.PositiveSmallIntegerField(
+        "jour", choices=TeacherUnavailability.Day.choices, null=True, blank=True,
+        help_text="Laisser vide pour interdire ce créneau tous les jours.",
+    )
+
+    class Meta:
+        ordering = ["subject__name", "period__order"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["timetable", "subject", "period", "day"],
+                name="unique_subject_period_restriction",
+            ),
+        ]
+        verbose_name = "interdiction de créneau"
+        verbose_name_plural = "interdictions de créneaux"
+
+    def __str__(self):
+        scope = self.get_day_display() if self.day is not None else "tous les jours"
+        return f"{self.subject.name} — {self.period} ({scope})"
+
+
+class TimetableSlot(models.Model):
+    timetable = models.ForeignKey(Timetable, on_delete=models.CASCADE, related_name="slots")
+    school_class = models.ForeignKey(SchoolClass, on_delete=models.CASCADE, related_name="timetable_slots")
+    class_subject = models.ForeignKey(ClassSubject, on_delete=models.CASCADE, related_name="timetable_slots")
+    teacher = models.ForeignKey(
+        CustomUser, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="timetable_slots", verbose_name="enseignant",
+    )
+    day = models.PositiveSmallIntegerField("jour", choices=TeacherUnavailability.Day.choices)
+    start_time = models.TimeField("heure de début")
+    end_time = models.TimeField("heure de fin")
+
+    class Meta:
+        ordering = ["day", "start_time", "school_class__group"]
+        constraints = [
+            # Une classe ne peut avoir qu'un cours à un créneau donné.
+            models.UniqueConstraint(
+                fields=["timetable", "school_class", "day", "start_time"],
+                name="unique_class_slot_per_time",
+            ),
+            models.CheckConstraint(condition=Q(end_time__gt=F("start_time")), name="timetable_slot_end_after_start"),
+        ]
+        verbose_name = "créneau d’emploi du temps"
+        verbose_name_plural = "créneaux d’emploi du temps"
+
+    def __str__(self):
+        return f"{self.school_class.group} — {self.class_subject.subject.name} ({self.get_day_display()} {self.start_time:%H:%M})"
+
+
+class ReportCardSettings(models.Model):
+    """Mise en forme des bulletins, réglée par école.
+
+    Le calcul reste toujours une moyenne pondérée par les coefficients ; ce
+    sont l'affichage et les seuils d'appréciation qui varient d'un
+    établissement à l'autre.
+    """
+
+    class Template(models.TextChoices):
+        STANDARD = "standard", "Standard"
+        OFFICIEL = "officiel", "Officiel (compact)"
+
+    school = models.OneToOneField(
+        School, on_delete=models.CASCADE, related_name="report_card_settings",
+    )
+    template = models.CharField(
+        "modèle de bulletin", max_length=12,
+        choices=Template.choices, default=Template.STANDARD,
+        help_text="Disposition imprimée. Le modèle officiel reprend la maquette "
+                  "administrative : une seule grille de notes et un pied de page "
+                  "récapitulatif (trimestres, absences, décision du conseil).",
+    )
+    class Watermark(models.TextChoices):
+        NONE = "aucun", "Aucun"
+        TILED = "mosaique", "Mosaïque (texte répété)"
+        DIAGONAL = "diagonale", "Bandeau en diagonale"
+        LOGO = "logo", "Logo en fond"
+
+    class WatermarkDensity(models.TextChoices):
+        """Serrage du motif en mosaïque, du plus aéré au plus couvrant."""
+
+        NORMAL = "normale", "Normale (lignes espacées)"
+        FULL = "pleine", "Pleine (motif serré)"
+        MAX = "max", "Maximale (page saturée)"
+
+    class WatermarkSource(models.TextChoices):
+        NAME = "nom", "Nom de l’établissement"
+        CODE = "code", "Code de l’établissement"
+
+    watermark = models.CharField(
+        "filigrane", max_length=12,
+        choices=Watermark.choices, default=Watermark.NONE,
+        help_text="Ancien réglage à choix unique, conservé pour les établissements "
+                  "paramétrés avant les filigranes combinés. C'est « watermarks » "
+                  "qui fait foi à l'impression.",
+    )
+    watermarks = models.JSONField(
+        "filigranes", default=list, blank=True,
+        help_text="Marques de fond imprimées derrière le bulletin, contre la "
+                  "photocopie. Elles se cumulent : mosaïque + diagonale + logo "
+                  "peuvent être imprimées ensemble.",
+    )
+    watermark_density = models.CharField(
+        "densité de la mosaïque", max_length=8,
+        choices=WatermarkDensity.choices, default=WatermarkDensity.NORMAL,
+        help_text="Serrage du texte répété, sans effet sur les autres filigranes.",
+    )
+    watermark_source = models.CharField(
+        "texte du filigrane", max_length=8,
+        choices=WatermarkSource.choices, default=WatermarkSource.NAME,
+        help_text="Texte repris par le filigrane, sans effet sur le filigrane « logo ».",
+    )
+    show_score_detail = models.BooleanField(
+        "afficher le détail des notes", default=True,
+        help_text="Affiche chaque ligne de note (interrogation, devoir…) en plus de la moyenne.",
+    )
+    group_by_category = models.BooleanField(
+        "regrouper par type de matière", default=True,
+        help_text="Regroupe les matières par type, avec un sous-total par groupe.",
+    )
+    show_rank = models.BooleanField("afficher le rang", default=True)
+    show_teacher = models.BooleanField("afficher le professeur", default=True)
+    show_appreciation = models.BooleanField("afficher l’appréciation", default=True)
+    show_class_statistics = models.BooleanField(
+        "afficher les statistiques de classe", default=True,
+        help_text="Plus forte moyenne, plus faible moyenne et moyenne générale de la classe.",
+    )
+    council_note = models.TextField("mention du conseil", blank=True)
+    configured_at = models.DateTimeField(
+        "enregistré le", null=True, blank=True,
+        help_text="Date du premier enregistrement manuel. Tant qu'elle est vide, "
+                  "l'établissement n'a jamais réglé ses bulletins et reçoit les "
+                  "valeurs d'usage ; une fois posée, plus rien ne modifie le "
+                  "paramétrage en dehors d'une saisie explicite.",
+    )
+
+    class Meta:
+        verbose_name = "paramétrage des bulletins"
+        verbose_name_plural = "paramétrages des bulletins"
+
+    def __str__(self):
+        return f"Bulletins — {self.school.name}"
+
+    @property
+    def active_watermarks(self):
+        """Filigranes réellement imprimés, sans « aucun » ni doublon.
+
+        Les écoles paramétrées avant les filigranes combinés n'ont que
+        l'ancien champ à choix unique : on le reprend tant que la liste est
+        vide, sinon leur bulletin perdrait sa marque de fond.
+        """
+        chosen = self.watermarks if isinstance(self.watermarks, list) else []
+        valid = dict(self.Watermark.choices)
+        kinds = [
+            kind for kind in chosen
+            if kind in valid and kind != self.Watermark.NONE
+        ]
+        if not kinds and self.watermark != self.Watermark.NONE:
+            kinds = [self.watermark]
+        # `dict.fromkeys` dédoublonne sans perdre l'ordre de superposition.
+        return list(dict.fromkeys(kinds))
+
+
+class SubjectCategoryOrder(models.Model):
+    """Rang d'un type de matière sur le bulletin, pour un périmètre donné.
+
+    L'ordre des blocs varie d'une filière à l'autre : un littéraire attend ses
+    matières littéraires en tête, un scientifique l'inverse. Une règle vise
+    donc soit un cycle, soit une série, soit des classes précises.
+
+    La règle la plus spécifique gagne : classes, puis série, puis cycle, puis
+    la règle générale de l'établissement.
+    """
+
+    class Scope(models.TextChoices):
+        SCHOOL = "ecole", "Tout l’établissement"
+        STAGE = "cycle", "Un cycle"
+        SERIES = "serie", "Une série"
+        CLASSES = "classes", "Des classes choisies"
+
+    school = models.ForeignKey(
+        School, on_delete=models.CASCADE, related_name="category_orders",
+    )
+    name = models.CharField("nom de la règle", max_length=80, blank=True)
+    scope = models.CharField(
+        "portée", max_length=10, choices=Scope.choices, default=Scope.SCHOOL,
+    )
+    stage = models.CharField(
+        "cycle", max_length=12, choices=SchoolLevel.Stage.choices, blank=True,
+    )
+    series = models.CharField("série", max_length=20, blank=True)
+    classes = models.ManyToManyField(
+        SchoolClass, blank=True, related_name="category_orders",
+        verbose_name="classes visées",
+    )
+    # Types de matières dans l'ordre voulu : le premier ouvre le bulletin.
+    categories = models.JSONField("ordre des types", default=list)
+
+    class Meta:
+        ordering = ["scope", "name"]
+        verbose_name = "ordre des types de matières"
+        verbose_name_plural = "ordres des types de matières"
+
+    def __str__(self):
+        return self.name or self.get_scope_display()
+
+    def matches(self, school_class):
+        """La règle s'applique-t-elle à cette classe ?"""
+        if self.scope == self.Scope.SCHOOL:
+            return True
+        if self.scope == self.Scope.STAGE:
+            return school_class.level.stage == self.stage
+        if self.scope == self.Scope.SERIES:
+            return (school_class.series or "").casefold() == self.series.casefold()
+        return self.classes.filter(pk=school_class.pk).exists()
+
+    @property
+    def precision(self):
+        """Plus le nombre est élevé, plus la règle est spécifique."""
+        return {
+            self.Scope.SCHOOL: 0,
+            self.Scope.STAGE: 1,
+            self.Scope.SERIES: 2,
+            self.Scope.CLASSES: 3,
+        }[self.scope]
+
+
+class ReportCardAppreciation(models.Model):
+    """Seuil d'appréciation : « à partir de 16, Très Bien »."""
+
+    school = models.ForeignKey(
+        School, on_delete=models.CASCADE, related_name="report_card_appreciations",
+    )
+    label = models.CharField("libellé", max_length=60)
+    minimum = models.DecimalField("note minimale", max_digits=5, decimal_places=2)
+
+    class Meta:
+        ordering = ["-minimum"]
+        constraints = [
+            models.UniqueConstraint(fields=["school", "label"], name="unique_appreciation_per_school"),
+            models.CheckConstraint(
+                condition=Q(minimum__gte=0) & Q(minimum__lte=20),
+                name="appreciation_minimum_within_scale",
+            ),
+        ]
+        verbose_name = "appréciation de bulletin"
+        verbose_name_plural = "appréciations de bulletin"
+
+    def __str__(self):
+        return f"{self.label} (≥ {self.minimum})"
+
+
+class ReportCard(models.Model):
+    """Bulletin figé d'un élève pour une session.
+
+    Les moyennes et le rang sont enregistrés au moment de la génération : un
+    bulletin remis ne doit pas changer parce qu'une note a été saisie ailleurs
+    depuis. Corriger passe par une régénération explicite.
+    """
+
+    session = models.ForeignKey(
+        AcademicSession, on_delete=models.CASCADE, related_name="report_cards",
+    )
+    enrollment = models.ForeignKey(
+        StudentEnrollment, on_delete=models.CASCADE, related_name="report_cards",
+    )
+    school_class = models.ForeignKey(
+        SchoolClass, on_delete=models.CASCADE, related_name="report_cards",
+    )
+    # Instantané du bulletin : matières, notes, sous-totaux, statistiques.
+    payload = models.JSONField("contenu", default=dict)
+    general_average = models.DecimalField(
+        "moyenne générale", max_digits=5, decimal_places=2, null=True, blank=True,
+    )
+    rank = models.PositiveIntegerField("rang", null=True, blank=True)
+    generated_at = models.DateTimeField("généré le", auto_now=True)
+    generated_by = models.ForeignKey(
+        CustomUser, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="generated_report_cards",
+    )
+
+    class Meta:
+        ordering = ["school_class__group", "rank"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["session", "enrollment"], name="unique_report_card_per_session",
+            ),
+        ]
+        verbose_name = "bulletin"
+        verbose_name_plural = "bulletins"
+
+    def __str__(self):
+        return f"Bulletin {self.enrollment.student.get_full_name()} — {self.session.name}"

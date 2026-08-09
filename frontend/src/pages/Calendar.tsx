@@ -1,19 +1,21 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useParams } from "react-router-dom";
+import { getMyTimetable, MyTimetable } from "../api/timetable";
 
-const DAYS_LABEL = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
+const DAYS_LABEL = ["DIM", "LUN", "MAR", "MER", "JEU", "VEN", "SAM"];
 const MONTHS = [
-  "January",
-  "February",
-  "March",
-  "April",
-  "May",
-  "June",
-  "July",
-  "August",
-  "September",
-  "October",
-  "November",
-  "December",
+  "Janvier",
+  "Février",
+  "Mars",
+  "Avril",
+  "Mai",
+  "Juin",
+  "Juillet",
+  "Août",
+  "Septembre",
+  "Octobre",
+  "Novembre",
+  "Décembre",
 ];
 
 const EVENT_COLORS = {
@@ -232,6 +234,16 @@ function getCalendar(year, month) {
   return cells;
 }
 
+/**
+ * Convertit un jour JavaScript (0 = dimanche) en jour d'emploi du temps
+ * (0 = lundi). Le dimanche vaut 6 et ne porte jamais de cours.
+ */
+function toTimetableDay(jsDay) {
+  return (jsDay + 6) % 7;
+}
+
+const shortTime = (value) => String(value).slice(0, 5);
+
 function EventChip({ event, small }) {
   const c = EVENT_COLORS[event.color];
   return (
@@ -252,14 +264,58 @@ function EventChip({ event, small }) {
 
 export default function Calendar() {
   const today = new Date();
-  const [year, setYear] = useState(2030);
-  const [month, setMonth] = useState(5);
+  const { schoolId = "" } = useParams();
+  const [year, setYear] = useState(today.getFullYear());
+  const [month, setMonth] = useState(today.getMonth() + 1);
   const [view, setView] = useState("Month");
-  const [selectedDay, setSelectedDay] = useState(8);
+  const [selectedDay, setSelectedDay] = useState(today.getDate());
+
+  const [schedule, setSchedule] = useState<MyTimetable | null>(null);
+  // Les gestionnaires basculent entre leur emploi du temps et celui de
+  // l'établissement ; les enseignants n'ont que le leur.
+  const [scope, setScope] = useState<"mine" | "all">("mine");
+
+  useEffect(() => {
+    if (!schoolId) return;
+    getMyTimetable(schoolId, scope).then(setSchedule).catch(() => setSchedule(null));
+  }, [schoolId, scope]);
+
+  // Cours indexés par jour de la semaine, dans l'ordre des créneaux.
+  type Lesson = MyTimetable["slots"][number];
+  const lessonsByDay = useMemo(() => {
+    const map: Record<number, Lesson[]> = {};
+    (schedule?.slots ?? []).forEach((slot) => {
+      (map[slot.day] ??= []).push(slot);
+    });
+    Object.values(map).forEach((rows) =>
+      rows.sort((a, b) => a.start_time.localeCompare(b.start_time)));
+    return map;
+  }, [schedule]);
+
+  const lessonsOn = (day) => {
+    const weekday = toTimetableDay(new Date(year, month - 1, day).getDay());
+    return lessonsByDay[weekday] ?? [];
+  };
+
+  /**
+   * En vue établissement, toutes les classes occupent les mêmes heures :
+   * on regroupe par créneau pour obtenir une liste lisible plutôt que
+   * vingt lignes au même horaire.
+   */
+  const groupByStart = (lessons: Lesson[]) => {
+    const rows = new Map<string, { start: string; end: string; items: Lesson[] }>();
+    lessons.forEach((lesson) => {
+      const key = lesson.start_time;
+      if (!rows.has(key)) rows.set(key, { start: lesson.start_time, end: lesson.end_time, items: [] });
+      rows.get(key).items.push(lesson);
+    });
+    return [...rows.values()];
+  };
 
   const cells = getCalendar(year, month);
   const selectedKey = getKey(year, month, selectedDay);
   const selectedEvents = EVENT_MAP[selectedKey] || [];
+  const selectedLessons = lessonsOn(selectedDay);
 
   const prevMonth = () => {
     if (month === 1) {
@@ -301,7 +357,7 @@ export default function Calendar() {
           </h2>
           <div className="cal-nav">
             <span className="cal-today-btn" onClick={goToday}>
-              Today
+              Aujourd’hui
             </span>
             <button className="cal-nav-btn" onClick={prevMonth}>
               ‹
@@ -345,11 +401,20 @@ export default function Calendar() {
                   <div className={`cal-cell-day${isToday ? " today" : ""}`}>
                     {cell.day}
                   </div>
-                  {extra > 0 && <div className="cal-more">{extra} more</div>}
+                  {extra > 0 && <div className="cal-more">{extra} de plus</div>}
                   <div className="cal-cell-events">
                     {events.slice(0, 2).map((e, i) => (
                       <EventChip key={i} event={e} small />
                     ))}
+                    {/* Le détail des cours tiendrait mal dans une case de mois :
+                        on annonce le volume, le panneau du jour donne le reste. */}
+                    {cell.cur && lessonsOn(cell.day).length > 0 && (
+                      <div className="cal-lesson-count">
+                        {scope === "all"
+                          ? `${groupByStart(lessonsOn(cell.day)).length} créneaux`
+                          : `${lessonsOn(cell.day).length} cours`}
+                      </div>
+                    )}
                   </div>
                 </div>
               );
@@ -393,11 +458,62 @@ export default function Calendar() {
         <div className="cal-sidebar-card">
           <div className="cal-sidebar-header">
             <span className="cal-sidebar-title">
-              {MONTHS[month - 1].slice(0, 3)}, {selectedDay} {year}
+              {selectedDay} {MONTHS[month - 1].toLowerCase()} {year}
             </span>
             <span className="cal-dots">···</span>
           </div>
           <div className="cal-day-events">
+            {/* Emploi du temps du jour sélectionné */}
+            {schedule?.timetable && (
+              <div className="cal-lessons">
+                <div className="cal-lessons-head">
+                  <span className="cal-lessons-title">
+                    {selectedLessons.length > 0
+                      ? `Cours du jour (${selectedLessons.length})`
+                      : "Cours du jour"}
+                  </span>
+                  {schedule.can_manage && (
+                    <button
+                      type="button"
+                      className="cal-scope-btn"
+                      onClick={() => setScope((s) => (s === "mine" ? "all" : "mine"))}
+                    >
+                      {scope === "mine" ? "Voir tout l’établissement" : "Voir mes cours"}
+                    </button>
+                  )}
+                </div>
+
+                {selectedLessons.length === 0 ? (
+                  <p className="cal-no-events">
+                    {scope === "mine"
+                      ? "Aucun cours ce jour."
+                      : "Aucun cours programmé ce jour."}
+                  </p>
+                ) : (
+                  groupByStart(selectedLessons).map((row) => (
+                    <div key={row.start} className="cal-lesson-row">
+                      <span className="cal-lesson-time">
+                        {shortTime(row.start)}
+                        <small>{shortTime(row.end)}</small>
+                      </span>
+                      <span className="cal-lesson-body">
+                        {row.items.map((lesson) => (
+                          <span key={lesson.id} className="cal-lesson-item">
+                            <strong>{lesson.subject}</strong>
+                            <small>
+                              {scope === "all"
+                                ? `${lesson.class_name}${lesson.teacher ? ` · ${lesson.teacher}` : ""}`
+                                : lesson.class_name}
+                            </small>
+                          </span>
+                        ))}
+                      </span>
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
+
             {selectedEvents.length === 0 && (
               <p className="cal-no-events">Aucun événement ce jour.</p>
             )}

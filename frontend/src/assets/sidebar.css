@@ -2,7 +2,7 @@
    Sidebar — thème clair
 ══════════════════════════════════════════ */
 .sidebar {
-  width: 220px;
+  width: 240px;
   background: white;
   display: flex;
   flex-direction: column;
@@ -12,31 +12,33 @@
   overflow: hidden;
 }
 
-/* ── Logo ── */
+/* ── Logo ──
+   En-tête compact : le nom se place à droite du sigle plutôt qu'en dessous,
+   pour laisser la hauteur au menu. */
 .sidebar-logo {
   display: flex;
   align-items: center;
-  gap: 11px;
-  padding: 17px 15px 16px;
+  gap: 9px;
+  padding: 12px 14px;
   border-bottom: 1px solid #f1f3f7;
   flex-shrink: 0;
 }
 
 .sidebar-logo-icon {
-  width: 43px;
-  height: 43px;
-  border-radius: 13px;
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
   background: linear-gradient(145deg, #1d4ed8 0%, #4f46e5 55%, #7c3aed 100%);
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 6px 16px rgba(79, 70, 229, 0.28);
+  box-shadow: 0 3px 9px rgba(79, 70, 229, 0.24);
   flex-shrink: 0;
 }
 
 .sidebar-logo-icon svg {
-  width: 32px;
-  height: 32px;
+  width: 22px;
+  height: 22px;
   overflow: visible;
 }
 
@@ -69,49 +71,58 @@
 
 .sidebar-school-name strong {
   color: #172554;
-  font-size: 19px;
-  font-weight: 900;
-  letter-spacing: 1.8px;
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: 1.2px;
 }
 
 .sidebar-school-name small {
-  margin-top: 4px;
-  color: #64748b;
-  font-size: 9px;
-  font-weight: 800;
-  letter-spacing: 0.65px;
+  margin-top: 1px;
+  color: #94a3b8;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
   white-space: nowrap;
 }
 
 .sidebar-school-switcher {
-  padding: 12px 14px;
+  padding: 10px 12px;
   border-bottom: 1px solid #f1f3f7;
   background: #f8fafc;
 }
 
 .sidebar-school-switcher label {
   display: block;
-  margin-bottom: 6px;
-  color: #64748b;
-  font-size: 10px;
-  font-weight: 800;
-  letter-spacing: 0.7px;
+  margin-bottom: 3px;
+  color: #94a3b8;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
   text-transform: uppercase;
 }
 
 .sidebar-school-switcher .academic-year-label {
-  margin-top: 11px;
+  margin-top: 8px;
 }
 
 .sidebar-school-switcher select {
   width: 100%;
-  padding: 8px 9px;
-  border: 1px solid #cbd5e1;
-  border-radius: 8px;
+  padding: 6px 8px;
+  border: 1px solid #e2e8f0;
+  border-radius: 7px;
   color: #1e3a5f;
   background: white;
   font-size: 12px;
-  font-weight: 700;
+  font-weight: 600;
+  /* Empêche un nom d'école long d'élargir la barre latérale. */
+  max-width: 100%;
+  text-overflow: ellipsis;
+}
+
+.sidebar-school-switcher select:focus {
+  outline: none;
+  border-color: #93b4f5;
+  box-shadow: 0 0 0 2px rgba(29, 78, 216, 0.1);
 }
 
 .sidebar-school-switcher span {
@@ -123,19 +134,21 @@
 .sidebar-scroll {
   flex: 1;
   overflow-y: auto;
-  padding: 16px 12px 24px;
+  padding: 10px 10px 20px;
   scrollbar-width: none;
 }
 .sidebar-scroll::-webkit-scrollbar { display: none; }
 
 /* ── Section label ── */
 .sidebar-section-label {
-  font-size: 11px;
+  font-size: 9px;
   font-weight: 700;
-  color: #9ca3af;
-  letter-spacing: 0.8px;
-  margin: 0 0 8px 8px;
+  color: #b6bec9;
+  letter-spacing: 0.9px;
+  margin: 0 0 5px 10px;
 }
+
+.sidebar-section-label.is-spaced { margin-top: 16px; }
 
 /* ── Nav ── */
 .sidebar-nav {
@@ -147,15 +160,15 @@
 .nav-btn {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 9px;
   width: 100%;
-  padding: 9px 12px;
-  border-radius: 10px;
+  padding: 7px 10px;
+  border-radius: 8px;
   border: none;
   cursor: pointer;
   background: transparent;
   color: #6b7280;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 500;
   text-align: left;
   text-decoration: none;
@@ -178,10 +191,26 @@
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  width: 20px;
+  width: 18px;
+  opacity: 0.9;
 }
 
-.nav-label { flex: 1; }
+.nav-btn.active .nav-icon { opacity: 1; }
+
+.nav-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* Un libellé long reste sur une seule ligne : la hauteur des entrées
+   est ainsi identique du haut en bas du menu. */
+.nav-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
 
 /* ── Chevron ── */
 .nav-chevron {
@@ -192,22 +221,26 @@
 
 /* ── Submenu ── */
 .nav-submenu {
-  margin-left: 30px;
+  margin-left: 19px;
   margin-top: 2px;
+  margin-bottom: 2px;
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  border-left: 2px solid #e5e7eb;
-  padding-left: 12px;
+  gap: 1px;
+  border-left: 1.5px solid #eef1f6;
+  padding-left: 10px;
 }
 
 .nav-sub-item {
-  padding: 7px 10px;
-  border-radius: 8px;
-  font-size: 13px;
+  padding: 6px 9px;
+  border-radius: 7px;
+  font-size: 12.5px;
   font-weight: 500;
   color: #6b7280;
   text-decoration: none;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   transition: background 0.15s, color 0.15s;
 }
 
@@ -222,10 +255,14 @@
   background: transparent;
 }
 
-/* ── Logout ── */
+/* ── Logout ──
+   Détaché du reste par un filet : c'est une action, pas une destination. */
 .nav-logout {
   color: #ef4444;
-  margin-top: 4px;
+  margin-top: 8px;
+  padding-top: 12px;
+  border-top: 1px solid #f1f3f7;
+  border-radius: 0 0 8px 8px;
 }
 .nav-logout:hover {
   background: #fef2f2;

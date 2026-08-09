@@ -2,7 +2,7 @@ from rest_framework.routers import DefaultRouter
 
 from django.urls import path
 
-from .views import AcademicSessionDetailView, AcademicSessionListView, AcademicYearViewSet, CustomUserViewSet, EnrollmentNumberSuggestionView, ExpenseCategoryListView, GradeContextView, GradeSchemeView, GradeSheetView, LoginView, LogoutView, OwnerViewSet, RoleChoicesView, SchoolClassViewSet, SchoolExpenseDetailView, SchoolExpenseListView, SchoolLevelViewSet, SchoolViewSet, StudentEnrollmentViewSet, SubjectViewSet, TeacherViewSet, TuitionComplianceView, TuitionFeePlanDetailView, TuitionFeePlanListView, TuitionPaymentListView, UsernameSuggestionView
+from .views import AcademicSessionDetailView, AcademicSessionListView, AcademicYearViewSet, AttendanceSessionListView, AttendanceSheetView, CustomUserViewSet, DisciplineRecordListView, EnrollmentNumberSuggestionView, ExpenseCategoryListView, GradeContextView, GradeSchemeView, GradeSheetView, LoginView, LogoutView, MyTimetableView, OwnerViewSet, ParentListView, ReportCardExportView, ReportCardGenerationView, ReportCardSettingsView, ReportCardView, RoleChoicesView, SchoolClassViewSet, SchoolExpenseDetailView, SchoolExpenseListView, SchoolLevelViewSet, SchoolViewSet, StudentEnrollmentViewSet, SubjectCategoryViewSet, SubjectViewSet, TeacherViewSet, TimetableExportView, TimetableSetupView, TimetableValidationView, TimetableView, TuitionComplianceView, TuitionFeePlanDetailView, TuitionFeePlanListView, TuitionPaymentListView, UsernameSuggestionView
 
 router = DefaultRouter()
 router.register("teachers", TeacherViewSet, basename="teacher")
@@ -27,6 +27,16 @@ urlpatterns = [
     ),
     path("schools/<int:school_pk>/teachers/<int:pk>/classes/", TeacherViewSet.as_view({"get": "class_assignments", "post": "class_assignments"}), name="teacher-class-assignments"),
     path("schools/<int:school_pk>/teachers/<int:pk>/unavailability/", TeacherViewSet.as_view({"get": "unavailability", "post": "unavailability"}), name="teacher-unavailability"),
+    path(
+        "schools/<int:school_pk>/subject-categories/",
+        SubjectCategoryViewSet.as_view({"get": "list", "post": "create"}),
+        name="school-subject-categories",
+    ),
+    path(
+        "schools/<int:school_pk>/subject-categories/<int:pk>/",
+        SubjectCategoryViewSet.as_view({"get": "retrieve", "patch": "partial_update", "delete": "destroy"}),
+        name="school-subject-category-detail",
+    ),
     path(
         "schools/<int:school_pk>/subjects/",
         SubjectViewSet.as_view({"get": "list", "post": "create"}),
@@ -105,8 +115,21 @@ urlpatterns = [
     path("schools/<int:school_pk>/finance/expense-categories/", ExpenseCategoryListView.as_view(), name="expense-categories"),
     path("schools/<int:school_pk>/finance/expenses/", SchoolExpenseListView.as_view(), name="school-expenses"),
     path("schools/<int:school_pk>/finance/expenses/<int:pk>/", SchoolExpenseDetailView.as_view(), name="school-expense-detail"),
+    path("schools/<int:school_pk>/discipline/records/", DisciplineRecordListView.as_view(), name="discipline-records"),
+    path("schools/<int:school_pk>/attendance/sessions/", AttendanceSessionListView.as_view(), name="attendance-sessions"),
+    path("schools/<int:school_pk>/attendance/sheet/", AttendanceSheetView.as_view(), name="attendance-sheet"),
     path("schools/<int:school_pk>/grades/contexts/", GradeContextView.as_view(), name="grade-contexts"),
     path("schools/<int:school_pk>/grades/sessions/<int:session_pk>/scheme/", GradeSchemeView.as_view(), name="grade-scheme"),
     path("schools/<int:school_pk>/grades/sessions/<int:session_pk>/subjects/<int:class_subject_pk>/", GradeSheetView.as_view(), name="grade-sheet"),
+    path("schools/<int:school_pk>/parents/", ParentListView.as_view(), name="school-parents"),
+    path("schools/<int:school_pk>/timetable/", TimetableView.as_view(), name="school-timetable"),
+    path("schools/<int:school_pk>/timetable/setup/", TimetableSetupView.as_view(), name="school-timetable-setup"),
+    path("schools/<int:school_pk>/timetable/validate/", TimetableValidationView.as_view(), name="school-timetable-validate"),
+    path("schools/<int:school_pk>/timetable/export/", TimetableExportView.as_view(), name="school-timetable-export"),
+    path("schools/<int:school_pk>/timetable/mine/", MyTimetableView.as_view(), name="school-timetable-mine"),
+    path("schools/<int:school_pk>/report-cards/sessions/<int:session_pk>/classes/<int:class_pk>/", ReportCardView.as_view(), name="report-cards"),
+    path("schools/<int:school_pk>/report-cards/settings/", ReportCardSettingsView.as_view(), name="report-card-settings"),
+    path("schools/<int:school_pk>/report-cards/sessions/<int:session_pk>/generate/", ReportCardGenerationView.as_view(), name="report-card-generate"),
+    path("schools/<int:school_pk>/report-cards/sessions/<int:session_pk>/export/", ReportCardExportView.as_view(), name="report-card-export"),
     *router.urls,
 ]

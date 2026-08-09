@@ -16,6 +16,9 @@
 .grade-groups section > div:first-child { display:flex; gap:8px; margin-bottom:10px; }
 .grade-groups .group-line { grid-template-columns:2fr 1fr auto; }
 .grade-sheet-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:15px; }
+.grade-student-search { display:flex; align-items:flex-end; justify-content:space-between; gap:12px; margin-bottom:12px; }
+.grade-student-search label { display:flex; flex:1; max-width:420px; flex-direction:column; gap:6px; color:#475569; font-size:12px; font-weight:700; }
+.grade-student-search span { color:#64748b; font-size:13px; white-space:nowrap; }
 .grade-sheet-wrap { overflow:auto; max-height:65vh; border:1px solid #e2e8f0; border-radius:10px; }
 .grade-sheet-wrap table { width:100%; border-collapse:collapse; }
 .grade-sheet-wrap th { position:sticky; top:0; z-index:2; padding:10px; color:#334155; background:#f8fafc; white-space:nowrap; }
@@ -24,4 +27,21 @@
 .grade-sheet-wrap td:nth-child(1),.grade-sheet-wrap td:nth-child(2) { position:sticky; z-index:1; background:#fff; }
 .grade-sheet-wrap td:nth-child(1) { left:0; }.grade-sheet-wrap td:nth-child(2) { left:120px; }
 .grade-sheet-wrap input { width:74px; padding:7px; border:1px solid #cbd5e1; border-radius:7px; color:#1e293b; background:#fff; }
-@media(max-width:700px){.grade-lines > div,.group-line,.grade-groups .group-line{grid-template-columns:1fr}.grade-sheet-head{align-items:flex-start;flex-direction:column}}
+.grade-no-results { padding:22px!important; color:#64748b!important; text-align:center; }
+@media(max-width:700px){.grade-lines > div,.group-line,.grade-groups .group-line{grid-template-columns:1fr}.grade-sheet-head,.grade-student-search{align-items:flex-start;flex-direction:column}.grade-student-search label{max-width:none;width:100%}}
+
+/* ── Enregistrement automatique des notes ── */
+.grade-save-state { font-size:12px; font-weight:700; white-space:nowrap; }
+.grade-save-state.is-idle    { color:#94a3b8; font-weight:600; }
+.grade-save-state.is-pending { color:#b45309; }
+.grade-save-state.is-saved   { color:#047857; }
+.grade-save-state.is-failed  { color:#dc2626; }
+
+/* Une note hors barème reste visible : la frappe n'est pas perdue, mais
+   le champ signale qu'elle ne partira pas au serveur. */
+.grade-sheet-wrap input.is-invalid {
+  border-color:#dc2626;
+  background:#fef2f2;
+  color:#b91c1c;
+}
+.grade-sheet-wrap input.is-invalid:focus { outline:2px solid #fca5a5; outline-offset:1px; }

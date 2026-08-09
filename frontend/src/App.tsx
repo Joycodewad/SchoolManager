@@ -22,6 +22,7 @@ import "./assets/notice.css";
 import "./assets/library.css";
 import "./assets/feescollection.css";
 import "./assets/grades.css";
+import "./assets/discipline.css";
 import DashboardLayout from "./layouts/DashboardLayout";
 import PrivateRoute from "./hooks/PrivateRoute";
 import Schools from "./pages/Schools";
@@ -34,6 +35,12 @@ import UnassignedStudents from "./pages/UnassignedStudents";
 import TuitionSettings from "./pages/TuitionSettings";
 import SchoolExpenses from "./pages/SchoolExpenses";
 import Grades from "./pages/Grades";
+import Discipline from "./pages/Discipline";
+import Owners from "./pages/Owners";
+import Parents from "./pages/Parents";
+import Timetable from "./pages/Timetable";
+import MyTimetable from "./pages/MyTimetable";
+import ReportCards from "./pages/ReportCards";
 function App() {
   return (
     <BrowserRouter>
@@ -41,6 +48,7 @@ function App() {
         <Route path="/" element={<Login />} />
         {/* Toutes les routes partagent DashboardLayout */}
         <Route element={<PrivateRoute><DashboardLayout /></PrivateRoute>}>
+          <Route path="/owners" element={<Owners />} />
           <Route path="/schools" element={<Schools />} />
           <Route path="/schools/:schoolId/dashboard" element={<Dashboard />} />
           <Route path="/schools/:schoolId/teachers" element={<Teachers />} />
@@ -63,6 +71,11 @@ function App() {
           <Route path="/schools/:schoolId/finance/tuition-settings" element={<TuitionSettings/>} />
           <Route path="/schools/:schoolId/finance/expenses" element={<SchoolExpenses/>} />
           <Route path="/schools/:schoolId/grades" element={<Grades/>} />
+          <Route path="/schools/:schoolId/discipline" element={<Discipline/>} />
+          <Route path="/schools/:schoolId/parents" element={<Parents/>} />
+          <Route path="/schools/:schoolId/timetable" element={<Timetable/>} />
+          <Route path="/schools/:schoolId/my-timetable" element={<MyTimetable/>} />
+          <Route path="/schools/:schoolId/report-cards" element={<ReportCards/>} />
           {/* 
           <Route
             path="/finance/expenses"

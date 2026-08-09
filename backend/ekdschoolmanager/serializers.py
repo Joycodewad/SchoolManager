@@ -6,7 +6,7 @@ from django.db import transaction
 from django.db.models import Sum
 from django.utils.text import slugify
 
-from .models import AcademicSession, AcademicYear, ClassFeeItem, ClassSubject, CustomUser, ExpenseCategory, FeeInstallment, FeeModule, FeePayment, GradeGroup, GradeLine, GradeScheme, School, SchoolClass, SchoolExpense, SchoolLevel, SchoolMembership, StudentEnrollment, Subject, TeacherClassAssignment, TeacherUnavailability, TuitionFeePlan
+from .models import AcademicSession, AcademicYear, AttendanceRecord, AttendanceSession, ClassFeeItem, ClassSubject, CustomUser, DisciplineRecord, ExpenseCategory, FeeInstallment, FeeModule, FeePayment, GradeGroup, GradeLine, GradeScheme, School, SchoolClass, SchoolExpense, SchoolLevel, SchoolMembership, StudentEnrollment, Subject, SubjectCategory, TeacherClassAssignment, TeacherUnavailability, TuitionFeePlan
 
 
 def normalize_togolese_phone(value):
@@ -46,7 +46,7 @@ class CustomUserSerializer(serializers.ModelSerializer):
         fields = [
             "id", "username", "last_name", "first_names", "email", "phone", "profession", "gender",
             "gender_label", "role", "role_label", "subjects", "subject_names", "primary_subject", "primary_subject_name", "is_active", "is_archived",
-            "date_of_birth", "address", "health_information", "enrollment_number", "student_status", "student_status_label",
+            "date_of_birth", "address", "health_information", "signature", "enrollment_number", "student_status", "student_status_label",
             "year_result", "year_result_label", "is_superuser", "school_ids", "date_joined",
             "assigned_school_ids", "assigned_classes", "homeroom_classes", "unavailability_schedule",
         ]
@@ -232,11 +232,39 @@ class SchoolMembershipSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "school", "joined_at"]
 
 
+class SubjectCategorySerializer(serializers.ModelSerializer):
+    subject_count = serializers.IntegerField(source="subjects.count", read_only=True)
+
+    class Meta:
+        model = SubjectCategory
+        fields = ["id", "school", "name", "subject_count", "created_at"]
+        read_only_fields = ["id", "school", "created_at"]
+
+    def validate_name(self, value):
+        name = " ".join(value.split())
+        if len(name) < 2:
+            raise serializers.ValidationError("Le nom du type est trop court.")
+        school = self.context["view"].get_school()
+        queryset = SubjectCategory.objects.filter(school=school, name__iexact=name)
+        if self.instance:
+            queryset = queryset.exclude(pk=self.instance.pk)
+        if queryset.exists():
+            raise serializers.ValidationError("Ce type de matière existe déjà dans cette école.")
+        return name
+
+
 class SubjectSerializer(serializers.ModelSerializer):
+    category_name = serializers.CharField(source="category.name", read_only=True)
+
     class Meta:
         model = Subject
-        fields = ["id", "school", "name", "code", "description", "is_active", "created_at"]
+        fields = ["id", "school", "name", "code", "category", "category_name", "description", "is_active", "created_at"]
         read_only_fields = ["id", "school", "created_at"]
+
+    def validate_category(self, value):
+        if value and value.school_id != self.context["view"].get_school().id:
+            raise serializers.ValidationError("Ce type n’appartient pas à cette école.")
+        return value
 
     def validate_name(self, value):
         name = " ".join(value.split())
@@ -509,6 +537,91 @@ class SchoolExpenseSerializer(serializers.ModelSerializer):
 
     def validate_label(self, value):
         return " ".join(value.split())
+
+
+class AttendanceRecordSerializer(serializers.ModelSerializer):
+    student_name = serializers.CharField(source="enrollment.student.get_full_name", read_only=True)
+    enrollment_number = serializers.CharField(source="enrollment.enrollment_number", read_only=True)
+    status_label = serializers.CharField(source="get_status_display", read_only=True)
+
+    class Meta:
+        model = AttendanceRecord
+        fields = [
+            "id", "enrollment", "student_name", "enrollment_number",
+            "status", "status_label", "minutes_late", "comment",
+        ]
+        read_only_fields = ["id", "student_name", "enrollment_number", "status_label"]
+
+
+class AttendanceSessionSerializer(serializers.ModelSerializer):
+    records = AttendanceRecordSerializer(many=True, read_only=True)
+    class_name = serializers.CharField(source="school_class.group", read_only=True)
+    subject_name = serializers.CharField(source="class_subject.subject.name", read_only=True)
+    taken_by_name = serializers.CharField(source="taken_by.get_full_name", read_only=True)
+    summary = serializers.SerializerMethodField()
+
+    class Meta:
+        model = AttendanceSession
+        fields = [
+            "id", "school_class", "class_name", "class_subject", "subject_name",
+            "taken_on", "period", "note", "taken_by_name", "records", "summary",
+            "created_at", "updated_at",
+        ]
+        read_only_fields = ["id", "taken_by_name", "created_at", "updated_at"]
+
+    def get_summary(self, instance):
+        """Compte par statut : ce que l'appel donne à lire d'un coup d'œil."""
+        counts = {value: 0 for value, _ in AttendanceRecord.Status.choices}
+        for record in instance.records.all():
+            counts[record.status] = counts.get(record.status, 0) + 1
+        counts["total"] = sum(
+            counts[value] for value, _ in AttendanceRecord.Status.choices
+        )
+        return counts
+
+
+class DisciplineRecordSerializer(serializers.ModelSerializer):
+    student_name = serializers.CharField(source="enrollment.student.get_full_name", read_only=True)
+    enrollment_number = serializers.CharField(source="enrollment.enrollment_number", read_only=True)
+    class_name = serializers.CharField(source="enrollment.school_class.name", read_only=True)
+    entry_type_label = serializers.CharField(source="get_entry_type_display", read_only=True)
+    severity_label = serializers.CharField(source="get_severity_display", read_only=True)
+    recorded_by_name = serializers.CharField(source="recorded_by.get_full_name", read_only=True)
+
+    class Meta:
+        model = DisciplineRecord
+        fields = [
+            "id", "enrollment", "student_name", "enrollment_number", "class_name",
+            "entry_type", "entry_type_label", "occurred_on", "late_hours",
+            "incident_type", "severity", "severity_label", "description", "action_taken",
+            "recorded_by_name", "created_at", "updated_at",
+        ]
+        read_only_fields = ["id", "recorded_by_name", "created_at", "updated_at"]
+
+    def validate(self, attrs):
+        school = self.context["school"]
+        academic_year = self.context["academic_year"]
+        enrollment = attrs.get("enrollment", getattr(self.instance, "enrollment", None))
+        if enrollment.school_id != school.id or enrollment.academic_year_id != academic_year.id:
+            raise serializers.ValidationError({"enrollment": "Cette inscription ne correspond pas à l’école et à l’année sélectionnées."})
+
+        entry_type = attrs.get("entry_type", getattr(self.instance, "entry_type", DisciplineRecord.EntryType.INCIDENT))
+        if entry_type in {DisciplineRecord.EntryType.LATE, DisciplineRecord.EntryType.ABSENCE}:
+            if (attrs.get("late_hours", getattr(self.instance, "late_hours", Decimal("0"))) or Decimal("0")) <= 0:
+                raise serializers.ValidationError({"late_hours": "Saisissez un nombre d’heures supérieur à 0."})
+            attrs["incident_type"] = ""
+            attrs["severity"] = ""
+        else:
+            incident_type = " ".join(str(attrs.get("incident_type", getattr(self.instance, "incident_type", ""))).split())
+            if not incident_type:
+                raise serializers.ValidationError({"incident_type": "Précisez le type d’incident."})
+            attrs["incident_type"] = incident_type
+            attrs["late_hours"] = Decimal("0")
+            if not attrs.get("severity", getattr(self.instance, "severity", "")):
+                attrs["severity"] = DisciplineRecord.Severity.MEDIUM
+        attrs["description"] = str(attrs.get("description", getattr(self.instance, "description", ""))).strip()
+        attrs["action_taken"] = str(attrs.get("action_taken", getattr(self.instance, "action_taken", ""))).strip()
+        return attrs
 
 
 class GradeLineConfigSerializer(serializers.ModelSerializer):

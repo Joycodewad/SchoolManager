@@ -10,9 +10,11 @@ export interface School {
 
 export interface AuthUser {
   id: number;
+  username: string;
   first_names: string;
   last_name: string;
   phone?: string | null;
+  email?: string | null;
   role: string;
   role_label: string;
   is_superuser: boolean;

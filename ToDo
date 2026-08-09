@@ -1,0 +1,152 @@
+pour ecolage tout ce qui n'a pas de tranche quand c'est select tranche doit être caché
+
+rebrique proprietaire
+
+Tableau de Bord
+Mes ecoles
+Personnels
+Matieres
+Année academique
+Eleves
+classes 
+Eleves sans classes
+Inscriptions
+Présences
+Discipline
+Notes(mais peut pas modifier une note)
+Finance(peut pas payer l'ecolage d'un eleve mais peut parametrer l'ecolage )
+Annonces
+Parents
+Calendrier
+Bibliotheque 
+Message
+profil
+Parametres
+Bulletin
+
+
+rebrique Censeur
+Tableau de Bord
+Personnels
+Matieres
+Année academique
+Eleves
+classes 
+Eleves sans classes
+Inscriptions
+Présences
+Discipline
+Notes(mais peut pas modifier une note)
+Finance(peut pas payer l'ecolage d'un eleve mais peut parametrer l'ecolage )
+Annonces
+Calendrier
+Parents
+Bibliotheque 
+Message
+profil
+Bulletin
+Parametres
+
+
+rebrique Proviseur
+
+Tableau de Bord
+Personnels
+Matieres
+Année academique
+Eleves
+classes 
+Eleves sans classes
+Inscriptions
+Bulletin
+Présences
+Discipline
+Notes(mais peut pas modifier une note)
+Finance(peut pas payer l'ecolage d'un eleve mais peut parametrer l'ecolage )
+Annonces
+Parents
+Calendrier
+Bibliotheque 
+Message
+profil
+Parametres
+
+Rebrique comptable
+Tableau de Bord (personalisé avec les infos sur les eleves avec scolarité)
+Parents
+Finance
+
+Rebrique Surveillant
+Tableau de Bord
+Eleves
+classes
+Inscriptions
+Présences
+Discipline
+Annonces
+Parents
+Calendrier
+Bibliotheque 
+Message
+profil
+Parametres
+
+Rebrique Secretaire
+
+Tableau de Bord
+Eleves
+classes
+Inscriptions
+Présences
+Discipline
+Annonces
+Parents
+Calendrier
+Bibliotheque 
+Message
+profil
+Parametres
+
+Rebrique Enseignant
+Eleves
+classes
+Présences
+Discipline
+Notes
+Annonces
+Parents
+Calendrier 
+Message
+profil
+Parametres
+
+Rebrique Personnels
+Eleves
+classes
+Présences
+Discipline
+Annonces
+Parents
+Calendrier 
+Message
+profil
+Parametres
+
+
+
+
+Reste a implementer
+Presences
+Discipline
+Annonces
+Parents
+
+Message
+profil
+Parametres
+Bulletin
+Emploi du temps
+Calendrier
+
+
+

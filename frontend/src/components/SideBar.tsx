@@ -94,12 +94,66 @@ const MENU = [
     ),
   },
   {
+    path: "/discipline",
+    label: "Discipline",
+    restrictedRoles: ["proprietaire", "admin", "censeur", "proviseur", "surveillant", "enseignant", "secretaire"],
+    icon: (
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+        <path d="M12 3 4 6v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V6l-8-3Z"/>
+        <path d="M9 12l2 2 4-5"/>
+      </svg>
+    ),
+  },
+  {
     path: "/grades",
     label: "Notes",
     restrictedRoles: ["enseignant", "proprietaire", "admin", "censeur", "proviseur"],
     icon: (
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
         <path d="M4 3h16v18H4z"/><path d="M8 7h8M8 11h8M8 15h4"/><path d="m15 16 2 2 4-5"/>
+      </svg>
+    ),
+  },
+  {
+    path: "/report-cards",
+    label: "Bulletins",
+    restrictedRoles: ["enseignant", "proprietaire", "admin", "censeur", "proviseur"],
+    icon: (
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+        <path d="M6 2h9l5 5v15H6z"/><path d="M15 2v5h5"/><path d="M9 13h6M9 17h4"/>
+      </svg>
+    ),
+  },
+  {
+    path: "/timetable",
+    label: "Emploi du temps",
+    restrictedRoles: ["proprietaire", "admin", "censeur", "proviseur", "enseignant", "secretaire"],
+    icon: (
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+        <rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18M8 2v4M16 2v4"/>
+        <path d="M8 13h3M13 13h3M8 17h3"/>
+      </svg>
+    ),
+  },
+  {
+    path: "/my-timetable",
+    label: "Mon emploi du temps",
+    icon: (
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+        <rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18M8 2v4M16 2v4"/>
+        <path d="m9 15 2 2 4-4"/>
+      </svg>
+    ),
+  },
+  {
+    path: "/parents",
+    label: "Parents",
+    restrictedRoles: ["proprietaire", "admin", "censeur", "proviseur", "secretaire", "surveillant"],
+    icon: (
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+        <circle cx="8" cy="8" r="3"/><circle cx="17" cy="9" r="2.5"/>
+        <path d="M2 20v-1.5A4.5 4.5 0 0 1 6.5 14h3A4.5 4.5 0 0 1 14 18.5V20"/>
+        <path d="M16 14h1a4 4 0 0 1 4 4v2"/>
       </svg>
     ),
   },
@@ -237,9 +291,26 @@ export default function Sidebar() {
         {/* MENU */}
         <p className="sidebar-section-label">MENU</p>
         <nav className="sidebar-nav">
+          {user?.is_superuser && (
+            <NavLink to="/owners" className={({ isActive }) => `nav-btn${isActive ? " active" : ""}`}>
+              <span className="nav-icon">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+                  <circle cx="12" cy="8" r="3.5"/>
+                  <path d="M5 20v-1a5 5 0 0 1 5-5h4a5 5 0 0 1 5 5v1"/>
+                </svg>
+              </span>
+              <span className="nav-label">Propriétaires</span>
+            </NavLink>
+          )}
           {(user?.role === "proprietaire" || user?.is_superuser) && (
             <NavLink to="/schools" className={({ isActive }) => `nav-btn${isActive ? " active" : ""}`}>
-              <span className="nav-icon">▦</span><span className="nav-label">Mes écoles</span>
+              <span className="nav-icon">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+                  <path d="M3 21h18M5 21V8l7-5 7 5v13"/>
+                  <path d="M10 21v-5h4v5"/>
+                </svg>
+              </span>
+              <span className="nav-label">Mes écoles</span>
             </NavLink>
           )}
           {MENU.map((item) => {
@@ -296,7 +367,7 @@ export default function Sidebar() {
         </nav>
 
         {/* OTHER */}
-        <p className="sidebar-section-label" style={{ marginTop: 24 }}>AUTRES</p>
+        <p className="sidebar-section-label is-spaced">AUTRES</p>
         <nav className="sidebar-nav">
           {OTHER.map((item) => (
             <NavLink

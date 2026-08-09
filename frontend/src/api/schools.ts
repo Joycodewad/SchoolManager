@@ -54,3 +54,19 @@ export async function createOwner(payload: {
     method: "POST", headers: headers(), body: JSON.stringify(payload),
   }));
 }
+
+export async function updateOwner(
+  id: number,
+  payload: { last_name?: string; first_names?: string; phone?: string; email?: string },
+): Promise<AuthUser> {
+  return parse(await fetch(`${API_URL}/owners/${id}/`, {
+    method: "PATCH", headers: headers(), body: JSON.stringify(payload),
+  }));
+}
+
+export async function archiveOwner(id: number): Promise<void> {
+  const response = await fetch(`${API_URL}/owners/${id}/`, {
+    method: "DELETE", headers: headers(),
+  });
+  if (!response.ok) throw new Error("Archivage impossible.");
+}
