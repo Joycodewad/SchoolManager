@@ -123,3 +123,7 @@ REST_FRAMEWORK = {
 
 from corsheaders.defaults import default_headers
 CORS_ALLOW_HEADERS = (*default_headers, "x-school-id", "x-academic-year-id")
+# Le front tourne sur un autre port que l'API : sans cette liste, le navigateur
+# masque l'en-tête au JavaScript et tous les PDF se téléchargent sous le nom de
+# repli, sans la session ni la classe. Concerne bulletins et emplois du temps.
+CORS_EXPOSE_HEADERS = ["Content-Disposition"]

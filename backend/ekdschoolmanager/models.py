@@ -32,7 +32,14 @@ class CustomUser(AbstractUser):
         NEW = "nouveau", "Nouveau"
         REPEATING = "redoublant", "Redoublant"
         DROPPED_OUT = "abandon", "Abandon"
+        # Diplômes de fin de cursus. Un élève les reçoit à la clôture de
+        # l'année quand il a réussi l'examen de son niveau et que l'école ne
+        # va pas plus loin : il quitte l'établissement avec son titre.
+        CEPD_HOLDER = "titulaire_cepd", "Titulaire du CEPD"
+        BEPC_HOLDER = "titulaire_bepc", "Titulaire du BEPC"
         BACHELOR = "bachelier", "Bachelier"
+        # Filet pour une école dont l'examen ne porte aucun de ces noms.
+        GRADUATED = "diplome", "Diplômé"
 
     class YearResult(models.TextChoices):
         PASSED = "reussi", "Réussi"
@@ -56,7 +63,7 @@ class CustomUser(AbstractUser):
     signature = models.ImageField("signature", upload_to="personnel/signatures/", null=True, blank=True)
     enrollment_number = models.CharField("numéro matricule", max_length=50, null=True, blank=True)
     student_status = models.CharField(
-        "statut de l’élève", max_length=12, choices=StudentStatus.choices,
+        "statut de l’élève", max_length=20, choices=StudentStatus.choices,
         default=StudentStatus.NEW,
     )
     year_result = models.CharField(
@@ -223,6 +230,10 @@ class AcademicSession(models.Model):
     start_date = models.DateField("date de début")
     end_date = models.DateField("date de fin")
     is_active = models.BooleanField("active", default=True)
+    is_final = models.BooleanField(
+        "dernière session de l'année", default=False,
+        help_text="Les bulletins de cette session portent la moyenne annuelle.",
+    )
     is_closed = models.BooleanField("clôturée", default=False)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -239,6 +250,160 @@ class AcademicSession(models.Model):
         return f"{self.name} — {self.academic_year.name}"
 
 
+class SessionClosure(models.Model):
+    """Archive figée d'une session au moment de sa clôture.
+
+    Les bulletins portent déjà leur propre instantané (`ReportCard.payload`)
+    et restent la source d'affichage. Cette table conserve ce qui n'y figure
+    pas — le détail brut des notes, la discipline et les appels — pour que la
+    session reste relisible telle quelle même si une classe est regroupée, une
+    matière renommée ou une inscription supprimée par la suite.
+    """
+
+    session = models.OneToOneField(
+        AcademicSession, on_delete=models.CASCADE, related_name="closure",
+        verbose_name="session",
+    )
+    closed_at = models.DateTimeField("clôturée le", auto_now_add=True)
+    closed_by = models.ForeignKey(
+        CustomUser, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="closed_sessions", verbose_name="clôturée par",
+    )
+    report_card_count = models.PositiveIntegerField("bulletins", default=0)
+    grade_entry_count = models.PositiveIntegerField("notes", default=0)
+    discipline_count = models.PositiveIntegerField("entrées de discipline", default=0)
+    attendance_session_count = models.PositiveIntegerField("appels", default=0)
+    attendance_record_count = models.PositiveIntegerField("présences", default=0)
+    payload = models.JSONField("archive", default=dict)
+
+    class Meta:
+        ordering = ["-closed_at"]
+        verbose_name = "clôture de session"
+        verbose_name_plural = "clôtures de session"
+
+    def __str__(self):
+        return f"Clôture — {self.session}"
+
+
+class YearClosure(models.Model):
+    """Archive figée d'une année académique au moment de sa clôture.
+
+    Clôturer une année, c'est arrêter ses comptes et faire passer les élèves.
+    L'état d'avant — les classes, qui était inscrit où, ce que chacun devait —
+    ne doit pas dépendre de ce qui sera modifié ensuite : il est recopié ici,
+    et le détail du sort de chaque élève avec lui.
+    """
+
+    academic_year = models.OneToOneField(
+        AcademicYear, on_delete=models.CASCADE, related_name="closure",
+        verbose_name="année académique",
+    )
+    next_year = models.ForeignKey(
+        AcademicYear, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="incoming_closures", verbose_name="année suivante",
+    )
+    closed_at = models.DateTimeField("clôturée le", auto_now_add=True)
+    closed_by = models.ForeignKey(
+        CustomUser, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="closed_years", verbose_name="clôturée par",
+    )
+    class_count = models.PositiveIntegerField("classes", default=0)
+    enrollment_count = models.PositiveIntegerField("inscriptions", default=0)
+    promoted_count = models.PositiveIntegerField("passages", default=0)
+    repeated_count = models.PositiveIntegerField("redoublements", default=0)
+    graduated_count = models.PositiveIntegerField("sorties diplômées", default=0)
+    unassigned_count = models.PositiveIntegerField("sans classe", default=0)
+    undecided_count = models.PositiveIntegerField("sans décision", default=0)
+    # Volume de vie scolaire arrêté avec l'année. Ces écritures restent
+    # rattachées à leur année et ne suivent pas les élèves : l'année suivante
+    # repart vierge, sans que rien n'ait été effacé.
+    discipline_count = models.PositiveIntegerField("entrées de discipline", default=0)
+    attendance_session_count = models.PositiveIntegerField("appels", default=0)
+    attendance_record_count = models.PositiveIntegerField("présences", default=0)
+    carried_debt_total = models.DecimalField(
+        "impayés reportés", max_digits=14, decimal_places=2, default=0,
+    )
+    # Ce que la clôture a reconduit sur l'année suivante. Sans classes dans
+    # l'année neuve, aucun élève admis n'aurait où être affecté : la
+    # reconduction fait partie de la clôture, et son bilan avec.
+    copied_class_count = models.PositiveIntegerField("classes reconduites", default=0)
+    copied_subject_count = models.PositiveIntegerField("matières reconduites", default=0)
+    copied_fee_plan_count = models.PositiveIntegerField("barèmes reconduits", default=0)
+    payload = models.JSONField("archive", default=dict)
+
+    class Meta:
+        ordering = ["-closed_at"]
+        verbose_name = "clôture d’année"
+        verbose_name_plural = "clôtures d’année"
+
+    def __str__(self):
+        return f"Clôture — {self.academic_year.name}"
+
+
+class CarriedDebt(models.Model):
+    """Écolage resté impayé à la clôture d'une année.
+
+    L'inscription de l'année close ne bouge plus ; la dette, elle, suit
+    l'élève. Elle se règle plus tard, pendant n'importe quelle année, en une
+    fois ou par versements.
+    """
+
+    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name="carried_debts")
+    student = models.ForeignKey(
+        CustomUser, on_delete=models.PROTECT, related_name="carried_debts",
+        verbose_name="élève",
+    )
+    origin_year = models.ForeignKey(
+        AcademicYear, on_delete=models.PROTECT, related_name="carried_debts",
+        verbose_name="année d’origine",
+    )
+    origin_enrollment = models.OneToOneField(
+        "StudentEnrollment", on_delete=models.PROTECT, related_name="carried_debt",
+        verbose_name="inscription d’origine",
+    )
+    amount = models.DecimalField("montant dû", max_digits=12, decimal_places=2)
+    settled_amount = models.DecimalField(
+        "montant réglé", max_digits=12, decimal_places=2, default=0,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["origin_year__start_date", "student__last_name"]
+        verbose_name = "impayé reporté"
+        verbose_name_plural = "impayés reportés"
+
+    @property
+    def outstanding(self):
+        """Ce qu'il reste à régler sur cette dette."""
+        return self.amount - self.settled_amount
+
+    def __str__(self):
+        return f"{self.student.get_full_name()} — {self.origin_year.name} : {self.outstanding}"
+
+
+class CarriedDebtPayment(models.Model):
+    """Versement sur un impayé reporté, tracé comme un encaissement d'écolage."""
+
+    debt = models.ForeignKey(CarriedDebt, on_delete=models.CASCADE, related_name="payments")
+    amount = models.DecimalField("montant", max_digits=12, decimal_places=2)
+    paid_on = models.DateField("date de paiement")
+    method = models.CharField("mode de paiement", max_length=20, default="espece")
+    reference = models.CharField("référence", max_length=100, blank=True)
+    notes = models.TextField("notes", blank=True)
+    received_by = models.ForeignKey(
+        CustomUser, on_delete=models.PROTECT, related_name="received_debt_payments",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-paid_on", "-created_at"]
+        verbose_name = "versement sur impayé"
+        verbose_name_plural = "versements sur impayés"
+
+    def __str__(self):
+        return f"{self.amount} — {self.debt.student.get_full_name()}"
+
+
 class SchoolLevel(models.Model):
     class Stage(models.TextChoices):
         PRIMARY = "primaire", "Primaire"
@@ -250,6 +415,21 @@ class SchoolLevel(models.Model):
     stage = models.CharField("cycle", max_length=12, choices=Stage.choices)
     order = models.PositiveSmallIntegerField("ordre")
     is_active = models.BooleanField("actif", default=True)
+    # Moyenne exigée en fin d'année. Sur un niveau d'examen, elle porte sur la
+    # note de l'examen officiel plutôt que sur la moyenne annuelle : c'est
+    # l'examen qui décide du passage, pas le conseil de classe.
+    passing_average = models.DecimalField(
+        "moyenne de passage", max_digits=4, decimal_places=2, default=10,
+    )
+    is_exam_level = models.BooleanField(
+        "classe d'examen", default=False,
+        help_text="Niveau sanctionné par un examen officiel : la décision de "
+                  "fin d'année suit le résultat de l'examen.",
+    )
+    exam_name = models.CharField(
+        "examen", max_length=30, blank=True, default="",
+        help_text="Nom de l'examen, écrit tel quel sur le bulletin (CEPD, BEPC, BAC 1…).",
+    )
 
     class Meta:
         ordering = ["order"]
@@ -264,21 +444,24 @@ class SchoolLevel(models.Model):
         return f"{self.name} — {self.school.name}"
 
 
+# Cursus togolais. Le troisième terme nomme l'examen qui sanctionne le niveau,
+# quand il y en a un : CM2, 3ème, Première et Terminale sont les quatre paliers
+# où c'est l'examen officiel, et non le conseil de classe, qui fait passer.
 DEFAULT_SCHOOL_LEVELS = [
-    ("CEI", SchoolLevel.Stage.PRIMARY),
-    ("CP1", SchoolLevel.Stage.PRIMARY),
-    ("CP2", SchoolLevel.Stage.PRIMARY),
-    ("CE1", SchoolLevel.Stage.PRIMARY),
-    ("CE2", SchoolLevel.Stage.PRIMARY),
-    ("CM1", SchoolLevel.Stage.PRIMARY),
-    ("CM2", SchoolLevel.Stage.PRIMARY),
-    ("6ème", SchoolLevel.Stage.MIDDLE),
-    ("5ème", SchoolLevel.Stage.MIDDLE),
-    ("4ème", SchoolLevel.Stage.MIDDLE),
-    ("3ème", SchoolLevel.Stage.MIDDLE),
-    ("Seconde", SchoolLevel.Stage.HIGH),
-    ("Première", SchoolLevel.Stage.HIGH),
-    ("Terminale", SchoolLevel.Stage.HIGH),
+    ("CEI", SchoolLevel.Stage.PRIMARY, ""),
+    ("CP1", SchoolLevel.Stage.PRIMARY, ""),
+    ("CP2", SchoolLevel.Stage.PRIMARY, ""),
+    ("CE1", SchoolLevel.Stage.PRIMARY, ""),
+    ("CE2", SchoolLevel.Stage.PRIMARY, ""),
+    ("CM1", SchoolLevel.Stage.PRIMARY, ""),
+    ("CM2", SchoolLevel.Stage.PRIMARY, "CEPD"),
+    ("6ème", SchoolLevel.Stage.MIDDLE, ""),
+    ("5ème", SchoolLevel.Stage.MIDDLE, ""),
+    ("4ème", SchoolLevel.Stage.MIDDLE, ""),
+    ("3ème", SchoolLevel.Stage.MIDDLE, "BEPC"),
+    ("Seconde", SchoolLevel.Stage.HIGH, ""),
+    ("Première", SchoolLevel.Stage.HIGH, "Baccalauréat Première partie"),
+    ("Terminale", SchoolLevel.Stage.HIGH, "Baccalauréat Deuxième partie"),
 ]
 
 
@@ -286,8 +469,11 @@ DEFAULT_SCHOOL_LEVELS = [
 def create_default_school_levels(sender, instance, created, **kwargs):
     if created:
         SchoolLevel.objects.bulk_create([
-            SchoolLevel(school=instance, name=name, stage=stage, order=index)
-            for index, (name, stage) in enumerate(DEFAULT_SCHOOL_LEVELS, start=1)
+            SchoolLevel(
+                school=instance, name=name, stage=stage, order=index,
+                is_exam_level=bool(exam), exam_name=exam,
+            )
+            for index, (name, stage, exam) in enumerate(DEFAULT_SCHOOL_LEVELS, start=1)
         ])
 
 
@@ -301,7 +487,7 @@ class SchoolClass(models.Model):
     )
     series = models.CharField("série", max_length=20, blank=True, default="")
     group = models.CharField("groupe", max_length=20)
-    maximum_capacity = models.PositiveSmallIntegerField("capacité maximale", default=50)
+    maximum_capacity = models.PositiveSmallIntegerField("capacité maximale", default=100)
     is_active = models.BooleanField("active", default=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -1010,6 +1196,89 @@ class TimetableSlot(models.Model):
         return f"{self.school_class.group} — {self.class_subject.subject.name} ({self.get_day_display()} {self.start_time:%H:%M})"
 
 
+def default_band_limits():
+    """Aucune limite au départ : seule la capacité des classes borne alors la
+    répartition."""
+    return {}
+
+
+class ClassAssignmentSettings(models.Model):
+    """Règles de répartition des élèves sans classe, réglées par école.
+
+    Répartir, c'est arbitrer entre plusieurs équilibres qui se contredisent :
+    des effectifs égaux, autant de filles partout, les meilleurs devant, et des
+    classes qui ne soient pas vidées de leurs bons élèves. Chaque établissement
+    tranche à sa façon — ces réglages disent comment.
+
+    Ils valent pour l'établissement, pas pour une année : ce sont des habitudes
+    de maison, qui survivent au changement d'année.
+    """
+
+    school = models.OneToOneField(
+        School, on_delete=models.CASCADE, related_name="class_assignment_settings",
+    )
+    youngest_first = models.BooleanField(
+        "les moins âgés dans les premières classes", default=True,
+        help_text="À moyenne égale, l'élève le plus jeune passe devant. Les "
+                  "plus âgés se retrouvent donc dans les dernières classes.",
+    )
+    best_first = models.BooleanField(
+        "les meilleures moyennes dans les premières classes", default=True,
+        help_text="Les élèves sont rangés par moyenne décroissante avant d'être "
+                  "distribués, la première classe servie en premier.",
+    )
+    balance_headcount = models.BooleanField(
+        "équilibrer les effectifs", default=True,
+        help_text="Chaque élève rejoint la classe la moins remplie de son "
+                  "niveau : les effectifs restent dans le même ordre de "
+                  "grandeur au lieu de remplir une classe avant la suivante.",
+    )
+    balance_girls = models.BooleanField(
+        "équilibrer le nombre de filles", default=True,
+        help_text="Les filles sont réparties comme les effectifs, en tenant "
+                  "compte de celles déjà inscrites dans chaque classe.",
+    )
+    reserved_excellent = models.PositiveSmallIntegerField(
+        "excellents élèves réservés par classe", default=3,
+        help_text="Nombre d'excellents élèves mis de côté pour chaque classe "
+                  "avant la distribution, en commençant par les dernières : "
+                  "sans cela, les meilleurs se concentrent tous devant. Zéro "
+                  "désactive la réserve.",
+    )
+    excellent_minimum = models.DecimalField(
+        "moyenne d'un excellent élève", max_digits=4, decimal_places=2, default=16,
+        help_text="Moyenne à partir de laquelle un élève entre dans la réserve.",
+    )
+    band_limits = models.JSONField(
+        "maximum par tranche de moyenne", default=default_band_limits, blank=True,
+        help_text="Nombre maximal d'élèves d'une tranche de moyenne à placer "
+                  "dans une même classe, niveau par niveau : "
+                  "{\"7\": {\"18\": 2}} limite à deux les élèves de 18 à 20 "
+                  "par classe du niveau 7. Une tranche absente ou à zéro n'est "
+                  "pas limitée, et la limite cède plutôt que de laisser un "
+                  "élève sans classe.",
+    )
+    allow_overflow = models.BooleanField(
+        "dépasser légèrement la capacité", default=True,
+        help_text="Quand toutes les classes d'un niveau sont pleines et qu'il "
+                  "reste des élèves, la capacité maximale est dépassée plutôt "
+                  "que de les laisser sans classe.",
+    )
+    overflow_margin = models.PositiveSmallIntegerField(
+        "dépassement toléré par classe", default=5,
+        help_text="Nombre de places ouvertes au-delà de la capacité maximale, "
+                  "et seulement quand il n'y a plus de place ailleurs.",
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "règles de répartition"
+        verbose_name_plural = "règles de répartition"
+
+    def __str__(self):
+        return f"Répartition — {self.school.name}"
+
+
 class ReportCardSettings(models.Model):
     """Mise en forme des bulletins, réglée par école.
 
@@ -1086,6 +1355,23 @@ class ReportCardSettings(models.Model):
     show_class_statistics = models.BooleanField(
         "afficher les statistiques de classe", default=True,
         help_text="Plus forte moyenne, plus faible moyenne et moyenne générale de la classe.",
+    )
+    # Signataires imprimés au pied du bulletin. Le titre — « Le Proviseur » —
+    # figure toujours sur la maquette ; ces réglages décident si le nom de la
+    # personne s'inscrit dessous. Les noms viennent des rôles de l'école, il
+    # n'y a rien à ressaisir ici.
+    show_principal_name = models.BooleanField(
+        "nom du proviseur", default=True,
+        help_text="Inscrit le nom du proviseur sous sa signature.",
+    )
+    show_censor_name = models.BooleanField(
+        "nom du censeur", default=False,
+        help_text="Ajoute la signature du censeur au pied du bulletin.",
+    )
+    show_founder_name = models.BooleanField(
+        "nom du fondateur", default=False,
+        help_text="Ajoute la signature du fondateur — le propriétaire de "
+                  "l'établissement — au pied du bulletin.",
     )
     council_note = models.TextField("mention du conseil", blank=True)
     configured_at = models.DateTimeField(
@@ -1235,6 +1521,16 @@ class ReportCard(models.Model):
         "moyenne générale", max_digits=5, decimal_places=2, null=True, blank=True,
     )
     rank = models.PositiveIntegerField("rang", null=True, blank=True)
+    # Date imprimée au pied du bulletin — « fait à …, le … ». Elle est choisie
+    # à la génération : c'est la date d'établissement que porte le document
+    # remis à la famille, pas l'horodatage technique du calcul.
+    issued_on = models.DateField("établi le", null=True, blank=True)
+    # Note obtenue à l'examen officiel, saisie par la direction quand les
+    # résultats tombent. Elle ne concerne que les niveaux d'examen, et c'est
+    # elle qui commande alors la décision de fin d'année.
+    exam_average = models.DecimalField(
+        "moyenne à l'examen", max_digits=5, decimal_places=2, null=True, blank=True,
+    )
     generated_at = models.DateTimeField("généré le", auto_now=True)
     generated_by = models.ForeignKey(
         CustomUser, on_delete=models.SET_NULL, null=True, blank=True,

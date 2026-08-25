@@ -6,6 +6,7 @@ from django.db import transaction
 from django.db.models import Sum
 from django.utils.text import slugify
 
+from .yearreopen import latest_closure
 from .models import AcademicSession, AcademicYear, Announcement, AttendanceRecord, AttendanceSession, ClassFeeItem, Conversation, Message, MessageAttachment, ClassSubject, CustomUser, DisciplineRecord, ExpenseCategory, FeeInstallment, FeeModule, FeePayment, GradeGroup, GradeLine, GradeScheme, School, SchoolClass, SchoolExpense, SchoolLevel, SchoolMembership, StudentEnrollment, Subject, SubjectCategory, TeacherClassAssignment, TeacherUnavailability, TuitionFeePlan
 
 
@@ -295,14 +296,48 @@ class SubjectSerializer(serializers.ModelSerializer):
         return attrs
 
 
+def class_labels(sessions):
+    """Noms lisibles des classes couvertes par un ensemble de sessions."""
+    class_ids = list(sessions.values_list("classes__id", flat=True).distinct())
+    if not class_ids:
+        return []
+    school_classes = SchoolClass.objects.filter(
+        id__in=class_ids,
+    ).select_related("level").order_by("level__order", "series", "group")
+    return [
+        " ".join(part for part in (school_class.level.name, school_class.series, school_class.group) if part)
+        for school_class in school_classes
+    ]
+
+
 class AcademicSessionSerializer(serializers.ModelSerializer):
     classes = serializers.PrimaryKeyRelatedField(queryset=SchoolClass.objects.all(), many=True)
     class_names = serializers.SlugRelatedField(source="classes", slug_field="name", many=True, read_only=True)
+    closure = serializers.SerializerMethodField()
+
+    def get_closure(self, obj):
+        """Compteurs de l'archive de clôture, sans le contenu.
+
+        Le `payload` peut peser plusieurs mégaoctets : il ne descend jamais
+        dans une liste de sessions.
+        """
+        closure = getattr(obj, "closure", None)
+        if closure is None:
+            return None
+        return {
+            "closed_at": closure.closed_at,
+            "closed_by": closure.closed_by.get_full_name() if closure.closed_by else "",
+            "report_cards": closure.report_card_count,
+            "grades": closure.grade_entry_count,
+            "discipline": closure.discipline_count,
+            "attendance_sessions": closure.attendance_session_count,
+            "attendance_records": closure.attendance_record_count,
+        }
 
     class Meta:
         model = AcademicSession
-        fields = ["id", "academic_year", "name", "label", "start_date", "end_date", "classes", "class_names", "is_active", "is_closed", "created_at"]
-        read_only_fields = ["id", "academic_year", "is_closed", "created_at"]
+        fields = ["id", "academic_year", "name", "label", "start_date", "end_date", "classes", "class_names", "is_active", "is_final", "is_closed", "closure", "created_at"]
+        read_only_fields = ["id", "academic_year", "is_closed", "closure", "created_at"]
 
     def validate_name(self, value):
         name = " ".join(value.split())
@@ -337,30 +372,57 @@ class AcademicSessionSerializer(serializers.ModelSerializer):
                 )
                 if self.instance:
                     conflicts = conflicts.exclude(pk=self.instance.pk)
-                conflicting_class_ids = list(conflicts.values_list("classes__id", flat=True).distinct())
-                if conflicting_class_ids:
-                    conflicting_classes = SchoolClass.objects.filter(
-                        id__in=conflicting_class_ids,
-                    ).select_related("level").order_by("level__order", "series", "group")
-                    conflicting_names = [
-                        " ".join(part for part in (school_class.level.name, school_class.series, school_class.group) if part)
-                        for school_class in conflicting_classes
-                    ]
+                conflicting_names = class_labels(conflicts)
+                if conflicting_names:
                     raise serializers.ValidationError({
                         "classes": f"Ces classes appartiennent déjà à une session active : {', '.join(conflicting_names)}."
+                    })
+        # Une classe n'a qu'une seule dernière session par année : c'est elle
+        # qui déclenche la moyenne annuelle sur le bulletin.
+        will_be_final = attrs.get("is_final", getattr(self.instance, "is_final", False))
+        if will_be_final:
+            final_classes = classes if classes is not None else (list(self.instance.classes.all()) if self.instance else [])
+            if final_classes:
+                conflicts = AcademicSession.objects.filter(
+                    academic_year=academic_year, is_final=True, classes__in=final_classes,
+                )
+                if self.instance:
+                    conflicts = conflicts.exclude(pk=self.instance.pk)
+                conflicting_names = class_labels(conflicts)
+                if conflicting_names:
+                    raise serializers.ValidationError({
+                        "is_final": f"Ces classes ont déjà une dernière session cette année : {', '.join(conflicting_names)}."
                     })
         return attrs
 
 
 class AcademicYearSerializer(serializers.ModelSerializer):
     sessions = AcademicSessionSerializer(many=True, read_only=True)
+    can_reopen = serializers.SerializerMethodField()
+
     class Meta:
         model = AcademicYear
         fields = [
             "id", "school", "name", "start_date", "end_date",
-            "is_active", "is_closed", "sessions", "created_at",
+            "is_active", "is_closed", "can_reopen", "sessions", "created_at",
         ]
         read_only_fields = ["id", "school", "is_closed", "created_at"]
+
+    def get_can_reopen(self, year):
+        """Seule la dernière année clôturée de l'établissement peut être rouverte.
+
+        Remonter plus loin laisserait l'année intermédiaire suspendue à des
+        inscriptions disparues.
+        """
+        if not year.is_closed:
+            return False
+        # Une seule recherche pour toute la liste : la réponse est la même
+        # pour chaque année du même établissement.
+        cache = self.context.setdefault("latest_closures", {})
+        if year.school_id not in cache:
+            cache[year.school_id] = latest_closure(year.school)
+        latest = cache[year.school_id]
+        return latest is not None and latest.academic_year_id == year.id
 
     def validate_name(self, value):
         return " ".join(value.split())
@@ -762,6 +824,8 @@ class StudentEnrollmentSerializer(serializers.ModelSerializer):
     guardian_name = serializers.CharField(source="guardian.get_full_name", read_only=True)
     guardian_phone_display = serializers.CharField(source="guardian.phone", read_only=True)
     guardian_profession_display = serializers.CharField(source="guardian.profession", read_only=True)
+    effective_average = serializers.SerializerMethodField()
+    average_source = serializers.SerializerMethodField()
 
     class Meta:
         model = StudentEnrollment
@@ -769,12 +833,31 @@ class StudentEnrollmentSerializer(serializers.ModelSerializer):
             "id", "enrollment_number", "student", "student_name", "student_last_name", "student_first_names", "student_gender",
             "student_username", "student_email", "student_phone", "student_address", "student_health_information", "gender_label", "date_of_birth_display",
             "student_year_result", "student_year_result_label", "student_date_joined", "status", "enrolled_at",
-            "level", "level_name", "level_stage", "series", "previous_average", "student_status", "student_status_label", "school_class", "school_class_name", "school_class_series", "academic_year_name", "history",
+            "level", "level_name", "level_stage", "series", "previous_average", "effective_average", "average_source", "student_status", "student_status_label", "school_class", "school_class_name", "school_class_series", "academic_year_name", "history",
             "guardian_id", "guardian_name", "guardian_phone_display", "guardian_profession_display",
             "guardian_phone", "guardian_last_name", "guardian_first_names", "guardian_profession",
             "last_name", "first_names", "gender", "date_of_birth", "health_information",
         ]
         read_only_fields = ["id", "student", "status", "enrolled_at"]
+
+    def get_effective_average(self, enrollment):
+        """Moyenne retenue pour classer l'élève, saisie ou retrouvée.
+
+        La valeur retrouvée n'est posée sur l'inscription que par les vues qui
+        en ont besoin — la liste des élèves sans classe et la répartition ;
+        ailleurs, seule la moyenne saisie est rendue.
+        """
+        if enrollment.previous_average is not None:
+            return str(enrollment.previous_average)
+        found = getattr(enrollment, "fallback_average", None)
+        return str(found) if found is not None else None
+
+    def get_average_source(self, enrollment):
+        """D'où vient cette moyenne : saisie, note d'examen, ou moyenne annuelle."""
+        return getattr(
+            enrollment, "average_source",
+            "saisie" if enrollment.previous_average is not None else "",
+        )
 
     def validate_enrollment_number(self, value):
         number = value.strip().upper()

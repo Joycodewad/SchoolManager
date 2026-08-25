@@ -142,7 +142,7 @@ def _document(buffer, title):
         pagesize=landscape(A4),
         leftMargin=11 * mm, rightMargin=11 * mm,
         topMargin=10 * mm, bottomMargin=10 * mm,
-        title=title, author="EKD School Manager",
+        title=title, author="Solys",
     )
 
 

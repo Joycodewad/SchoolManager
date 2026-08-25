@@ -18,6 +18,7 @@ from reportlab.lib.enums import TA_CENTER, TA_LEFT
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import mm
+from reportlab.lib.utils import ImageReader
 from reportlab.platypus import (
     Image,
     KeepTogether,
@@ -318,18 +319,153 @@ def summary_block(card, options):
     return table
 
 
-def footer_block(school, council_note, homeroom_teacher=""):
+# Encombrement maximal d'une signature manuscrite dans sa colonne. Le tracé
+# occupe cette boîte au mieux sans jamais se déformer ni la déborder.
+SIGNATURE_BOX = (30 * mm, 9 * mm)
+
+
+# Zéro à dix-neuf : les seuls mots à connaître, le reste s'en déduit.
+SMALL_NUMBERS = (
+    "zéro", "un", "deux", "trois", "quatre", "cinq", "six", "sept", "huit", "neuf",
+    "dix", "onze", "douze", "treize", "quatorze", "quinze", "seize",
+    "dix-sept", "dix-huit", "dix-neuf",
+)
+TENS = {2: "vingt", 3: "trente", 4: "quarante", 5: "cinquante", 6: "soixante"}
+
+
+def number_in_words(number):
+    """Un entier de 0 à 99 en toutes lettres, orthographe française.
+
+    Couvre ce dont un bulletin a besoin : une moyenne sur 20 et ses centièmes.
+    Les irrégularités de la langue sont traitées explicitement — « vingt et
+    un » sans trait d'union, « quatre-vingts » avec s quand rien ne suit,
+    « soixante et onze » mais « quatre-vingt-onze ».
+    """
+    if not 0 <= number <= 99:
+        return ""
+    if number < 20:
+        return SMALL_NUMBERS[number]
+    if number < 70:
+        ten, unit = divmod(number, 10)
+        if unit == 0:
+            return TENS[ten]
+        if unit == 1:
+            return f"{TENS[ten]} et un"
+        return f"{TENS[ten]}-{SMALL_NUMBERS[unit]}"
+    if number < 80:
+        rest = number - 60
+        return "soixante et onze" if rest == 11 else f"soixante-{SMALL_NUMBERS[rest]}"
+    rest = number - 80
+    return "quatre-vingts" if rest == 0 else f"quatre-vingt-{SMALL_NUMBERS[rest]}"
+
+
+def average_in_words(value):
+    """Moyenne écrite en toutes lettres, pour la case prévue sur la maquette.
+
+    « 12.53 » donne « Douze virgule cinquante-trois ». Une moyenne ronde s'en
+    tient à son entier : « quatorze », et non « quatorze virgule zéro ».
+    """
+    if value in (None, ""):
+        return ""
+    try:
+        amount = Decimal(str(value)).quantize(Decimal("0.01"))
+    except (InvalidOperation, ValueError):
+        return ""
+    whole = int(amount)
+    cents = int((amount - whole) * 100)
+    words = number_in_words(whole)
+    if not words:
+        return ""
+    if cents:
+        # « 12,05 » se lit « douze virgule zéro cinq » : sans ce zéro, on
+        # lirait douze virgule cinq, soit une moyenne différente.
+        lead = "zéro " if cents < 10 else ""
+        words = f"{words} virgule {lead}{number_in_words(cents)}"
+    return words[:1].upper() + words[1:]
+
+
+def signature_image(path, box=SIGNATURE_BOX, align="LEFT"):
+    """Signature tracée, mise à l'échelle dans la boîte qu'on lui laisse.
+
+    Le rapport largeur/hauteur du fichier est conservé : une signature large
+    et plate ne s'étire pas pour remplir la boîte, elle s'y inscrit. La boîte
+    ne se dépasse jamais — c'est elle qui garantit qu'une signature n'élargit
+    pas sa cellule ni ne pousse la ligne. Le fond transparent laisse voir le
+    filigrane derrière.
+    """
+    if not path:
+        return None
+    max_width, max_height = box
+    try:
+        natural_width, natural_height = ImageReader(path).getSize()
+    except Exception:
+        # Fichier illisible : le bulletin s'imprime quand même, sans image.
+        return None
+    if not natural_width or not natural_height:
+        return None
+    scale = min(max_width / natural_width, max_height / natural_height)
+    image = Image(
+        path, width=natural_width * scale, height=natural_height * scale, mask="auto",
+    )
+    image.hAlign = align
+    return image
+
+
+def signature_cell(row, style_, title=None):
+    """Colonne d'un signataire : son titre, sa signature, son nom.
+
+    Les trois se suivent sans rien entre eux et partagent le même bord gauche
+    — titre, signature, nom — pour que le bloc se lise comme une signature
+    manuscrite posée sous sa fonction. Sans signature enregistrée, l'espace
+    reste libre pour signer à la main.
+    """
+    parts = [Paragraph(title or f"<b>{row['title']}</b>", style_)]
+    image = signature_image(row.get("signature"))
+    if image is not None:
+        parts.append(image)
+    if row.get("name"):
+        parts.append(Paragraph(row["name"], style_))
+    return parts
+
+
+def decision_line(card):
+    """Décision de fin d'année, telle qu'elle s'écrit dans la case du conseil.
+
+    Rien sur les bulletins de milieu d'année, ni tant que le résultat qui la
+    fonde manque : la case reste alors libre pour le conseil de classe.
+    """
+    decision = card.get("decision") or {}
+    if not decision.get("label"):
+        return ""
+    return (
+        f"<b>{decision['label'].upper()}</b> — {decision['basis']} "
+        f"{decision['value']} sur 20"
+    )
+
+
+def footer_block(school, council_note, homeroom_teacher="", issued_on="", decision="",
+                 signatories=()):
     city = school.get("city") or ""
+    # Sans date d'établissement, la ligne reste à remplir à la main.
+    day = issued_on or "……………………"
     # Sans ville renseignée, on n'imprime pas une virgule orpheline.
-    place = f"Fait à {city}, le ……………………" if city else "Fait le ……………………"
+    place = f"Fait à {city}, le {day}" if city else f"Fait le {day}"
     titulaire = (
         f"<br/><br/><b>Professeur titulaire :</b> {homeroom_teacher}"
         if homeroom_teacher else ""
     )
+    verdict = f"{decision}<br/>" if decision else ""
+    # Les signataires retenus s'empilent sous le lieu et la date. Sans aucun
+    # réglage, la maquette garde son intitulé générique à signer à la main.
+    signed = [Paragraph(f"{place}<br/>", FOOT_STYLE)]
+    for row in signatories:
+        signed += signature_cell({**row, "title": row["title"].upper()}, FOOT_STYLE)
+    if not signatories:
+        signed.append(Paragraph("<b>LE DIRECTEUR / PROVISEUR</b>", FOOT_STYLE))
     rows = [[
-        Paragraph("<b>Décision du conseil :</b><br/><br/>" + (council_note or "") + titulaire,
+        Paragraph("<b>Décision du conseil :</b><br/>" + verdict + "<br/>" + (council_note or "") + titulaire,
                   FOOT_STYLE),
-        Paragraph(f"{place}<br/><br/><b>LE DIRECTEUR / PROVISEUR</b>", FOOT_STYLE),
+        signed,
     ]]
     table = Table(rows, colWidths=[110 * mm, 68 * mm])
     table.setStyle(TableStyle([
@@ -354,6 +490,11 @@ OFFICIAL_STATE_STYLE = style("officialState", 5.9, 7.2, align=TA_CENTER)
 OFFICIAL_TITLE_STYLE = style("officialTitle", 13, 15, bold=True, align=TA_CENTER)
 OFFICIAL_SUBTITLE_STYLE = style("officialSubtitle", 9, 11, bold=True, align=TA_CENTER)
 OFFICIAL_CELL = style("officialCell", 6.2, 7.6)
+# Boîte de la signature dans la colonne « Signature » de la grille. La hauteur
+# ne dépasse pas l'interligne d'une cellule : une ligne de matière garde donc
+# exactement la hauteur qu'elle aurait sans signature. La largeur tient dans
+# les 16 mm de la colonne, paddings déduits.
+SUBJECT_SIGNATURE_BOX = (13.5 * mm, 7.6)
 OFFICIAL_CELL_CENTER = style("officialCellCenter", 6.2, 7.6, align=TA_CENTER)
 OFFICIAL_CELL_BOLD = style("officialCellBold", 6.2, 7.6, bold=True, align=TA_CENTER)
 OFFICIAL_HEAD = style("officialHead", 5.6, 6.8, bold=True, align=TA_CENTER)
@@ -371,27 +512,6 @@ DISCIPLINE_ROWS = [
     ("Avertissement", ""),
     ("Blâme", ""),
 ]
-
-
-def session_caption(card, session):
-    """Nom de la session, suivi de son rang dans l'année quand il est connu.
-
-    La dernière session est annoncée comme telle : c'est celle qui porte la
-    moyenne annuelle, et le lecteur doit savoir qu'il tient le bulletin de fin
-    d'année. Une classe qui n'a qu'une session ne mérite pas cette précision.
-    """
-    history = card.get("history") or {}
-    name = session["name"]
-    total = history.get("total") or 0
-    if total < 2:
-        return name
-    if history.get("is_final"):
-        return f"{name} — dernière session de l’année ({total}/{total})"
-    current = next(
-        (term["order"] for term in history.get("terms", []) if term.get("is_current")),
-        None,
-    )
-    return f"{name} ({current}/{total})" if current else name
 
 
 def official_header(card, school, session, year_name, logo_path):
@@ -448,7 +568,7 @@ def official_header(card, school, session, year_name, logo_path):
 
     title = Table(
         [[[Paragraph("BULLETIN DE NOTES", OFFICIAL_TITLE_STYLE),
-           Paragraph(f"<i>{session_caption(card, session).upper()}</i>",
+           Paragraph(f"<i>{session['name'].upper()}</i>",
                      OFFICIAL_SUBTITLE_STYLE)], facts]],
         colWidths=[112 * mm, 46 * mm],
     )
@@ -481,6 +601,7 @@ def official_subjects_table(card, options):
     classe (interrogation, devoir), leur moyenne, puis la composition.
     """
     columns = card.get("line_columns", []) if options.get("show_score_detail") else []
+    teacher_signatures = options.get("teacher_signatures") or {}
 
     # La moyenne des notes de classe s'intercale juste avant la composition.
     class_work = [column for column in columns if not is_composition(column)]
@@ -527,7 +648,12 @@ def official_subjects_table(card, options):
                 Paragraph(ordinal(subject.get("rank")), OFFICIAL_CELL_CENTER),
                 Paragraph(subject.get("teacher", ""), OFFICIAL_CELL),
                 Paragraph(subject.get("appreciation", ""), OFFICIAL_CELL),
-                Paragraph("", OFFICIAL_CELL),
+                # Signature de l'enseignant de la matière, s'il en a enregistré
+                # une ; sinon la case reste libre pour signer à la main.
+                signature_image(
+                    teacher_signatures.get(subject.get("class_subject_id")),
+                    box=SUBJECT_SIGNATURE_BOX, align="CENTER",
+                ) or Paragraph("", OFFICIAL_CELL),
             ]
             rows.append(line)
 
@@ -662,46 +788,75 @@ def official_recap(card, options):
     return outer
 
 
-def official_footer(school, council_note, homeroom_teacher="", is_final=False):
+def official_footer(school, council_note, homeroom_teacher="", is_final=False,
+                    issued_on="", decision="", signatories=(), homeroom_signature="",
+                    annual_average=""):
     """Décision du conseil, puis les deux signatures de la maquette.
 
     `is_final` : la case « moyenne annuelle en lettre », à remplir à la main,
     n'est réservée qu'au bulletin de fin d'année — ailleurs elle appellerait
     une valeur qui n'existe pas encore.
+
+    `issued_on` : la date d'établissement choisie à la génération. À défaut,
+    la ligne de pointillés de la maquette papier reste telle quelle.
+
+    `signatories` : les signataires retenus au paramétrage, du censeur au
+    proviseur. Le titre du proviseur reste imprimé même sans signataire —
+    c'est la maquette officielle — seul son nom dépend du réglage.
     """
     city = school.get("city") or ""
-    place = f"{city.upper()}, le ……………………" if city else "Le ……………………"
+    day = issued_on or "……………………"
+    place = f"{city.upper()}, le {day}" if city else f"Le {day}"
 
-    decision = Table(
+    verdict = " — ".join(part for part in (decision, council_note or "") if part)
+    decision_table = Table(
         [[Paragraph("<b>Décision et observation du conseil de classe</b>", OFFICIAL_FOOT)],
-         [Paragraph(council_note or "", OFFICIAL_FOOT)]],
+         [Paragraph(verdict, OFFICIAL_FOOT)]],
         colWidths=[178 * mm], rowHeights=[7 * mm, 12 * mm],
     )
-    decision.setStyle(TableStyle([
+    decision_table.setStyle(TableStyle([
         ("GRID", (0, 0), (-1, -1), 0.4, LINE),
         ("ALIGN", (0, 0), (0, 0), "CENTER"),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
         ("LEFTPADDING", (0, 0), (-1, -1), 4),
     ]))
 
+    # Une colonne par signataire retenu. Le proviseur ferme la ligne à droite,
+    # sous le lieu et la date ; les autres s'intercalent entre le titulaire et
+    # lui. La largeur se répartit sur ce qui est réellement imprimé.
+    sign_style = style("officialSign", 6.4, 8)
+    # Le titulaire suit la même disposition que les autres signataires :
+    # fonction, signature, nom, alignés sur le même bord.
+    cells = [signature_cell(
+        {"name": homeroom_teacher, "signature": homeroom_signature},
+        OFFICIAL_FOOT, title="<b>Professeur titulaire</b>",
+    )]
+    if is_final:
+        words = average_in_words(annual_average)
+        cells.append(Paragraph(
+            "<i>Moy. annuelle en lettre</i>" + (f"<br/><b>{words}</b>" if words else ""),
+            style("officialWords", 6.4, 8, align=TA_CENTER),
+        ))
+    for row in signatories:
+        if row["key"] == "principal":
+            continue
+        cells.append(signature_cell(row, sign_style))
+
+    principal = next((row for row in signatories if row["key"] == "principal"), None)
+    cells.append(signature_cell(
+        principal or {}, sign_style, title=f"{place}<br/><b>Le Proviseur</b>",
+    ))
+
+    width = 178 * mm / len(cells)
     signatures = Table(
-        [[Paragraph(
-            "<b>Professeur titulaire</b>"
-            # Le nom du titulaire sous l'intitulé, comme sur la maquette papier.
-            + (f"<br/>{homeroom_teacher}" if homeroom_teacher else ""),
-            OFFICIAL_FOOT),
-          Paragraph("<i>Moy. annuelle en lettre</i>" if is_final else "",
-                    style("officialWords", 6.4, 8, align=TA_CENTER)),
-          Paragraph(f"{place}<br/><b>Le Proviseur</b>",
-                    style("officialSign", 6.4, 8, align=TA_CENTER))]],
-        colWidths=[54 * mm, 62 * mm, 62 * mm], rowHeights=[20 * mm],
+        [cells], colWidths=[width] * len(cells), rowHeights=[20 * mm],
     )
     signatures.setStyle(TableStyle([
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
         ("LEFTPADDING", (0, 0), (-1, -1), 2),
         ("TOPPADDING", (0, 0), (-1, -1), 3),
     ]))
-    return [decision, Spacer(1, 1 * mm), signatures]
+    return [decision_table, Spacer(1, 1 * mm), signatures]
 
 
 def official_story(card, school, session, year_name, options, logo_path):
@@ -714,7 +869,12 @@ def official_story(card, school, session, year_name, options, logo_path):
         Spacer(1, 1.5 * mm),
         *official_footer(school, options.get("council_note", ""),
                          card.get("homeroom_teacher", ""),
-                         is_final=(card.get("history") or {}).get("is_final", False)),
+                         is_final=(card.get("history") or {}).get("is_final", False),
+                         issued_on=card.get("issued_on", ""),
+                         decision=decision_line(card),
+                         signatories=options.get("signatories", ()),
+                         homeroom_signature=card.get("homeroom_signature", ""),
+                         annual_average=(card.get("history") or {}).get("annual_average")),
     ]
 
 
@@ -728,7 +888,7 @@ def standard_story(card, school, session, year_name, options, logo_path):
                        statistics.get("headcount", 0)),
         Spacer(1, 3 * mm),
         KeepTogether([
-            Paragraph(f"BULLETIN DE NOTES DU {session_caption(card, session).upper()}",
+            Paragraph(f"BULLETIN DE NOTES DU {session['name'].upper()}",
                       TITLE_STYLE),
             Paragraph(f"Année scolaire : {year_name}", SUBTITLE_STYLE),
         ]),
@@ -738,7 +898,10 @@ def standard_story(card, school, session, year_name, options, logo_path):
         summary_block(card, options),
         Spacer(1, 3 * mm),
         footer_block(school, options.get("council_note", ""),
-                     card.get("homeroom_teacher", "")),
+                     card.get("homeroom_teacher", ""),
+                     issued_on=card.get("issued_on", ""),
+                     decision=decision_line(card),
+                     signatories=options.get("signatories", ())),
     ]
 
 
@@ -889,7 +1052,7 @@ def report_cards_pdf(cards, school, session, year_name, options, logo_path=None)
         buffer, pagesize=A4,
         leftMargin=16 * mm, rightMargin=16 * mm,
         topMargin=10 * mm, bottomMargin=10 * mm,
-        title=f"Bulletins — {session['name']}", author="EKD School Manager",
+        title=f"Bulletins — {session['name']}", author="Solys",
     )
 
     page = official_story if options.get("template") == "officiel" else standard_story

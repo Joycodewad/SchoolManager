@@ -1,7 +1,7 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
 
-from .models import AcademicYear, CustomUser, School, SchoolLevel, SchoolMembership, StudentEnrollment, Subject
+from .models import AcademicYear, CustomUser, School, SchoolLevel, SchoolMembership, StudentEnrollment, Subject, SessionClosure
 
 
 @admin.register(CustomUser)
@@ -59,3 +59,28 @@ class SchoolLevelAdmin(admin.ModelAdmin):
     add_fieldsets = (
         (None, {"classes": ("wide",), "fields": ("username", "password1", "password2", "role", "is_staff", "is_active")}),
     )
+
+
+@admin.register(SessionClosure)
+class SessionClosureAdmin(admin.ModelAdmin):
+    """Archive de clôture : consultable, jamais modifiable depuis l'admin.
+
+    Toucher à une archive lui ferait perdre sa raison d'être ; une session
+    close se rouvre en supprimant sa clôture, pas en la corrigeant.
+    """
+
+    list_display = (
+        "session", "closed_at", "closed_by", "report_card_count",
+        "grade_entry_count", "discipline_count", "attendance_session_count",
+    )
+    list_filter = ("session__academic_year__school", "closed_at")
+    search_fields = ("session__name", "session__academic_year__name")
+    readonly_fields = tuple(
+        field.name for field in SessionClosure._meta.fields
+    )
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False

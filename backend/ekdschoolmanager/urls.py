@@ -2,7 +2,7 @@ from rest_framework.routers import DefaultRouter
 
 from django.urls import path
 
-from .views import AcademicSessionDetailView, AcademicSessionListView, AcademicYearViewSet, AnnouncementDetailView, AnnouncementListView, AttendanceSessionListView, AttendanceSheetView, ConversationDetailView, ConversationListView, MessageRecipientsView, CustomUserViewSet, DisciplineRecordListView, EnrollmentNumberSuggestionView, ExpenseCategoryListView, GradeContextView, GradeSchemeView, GradeSheetView, LoginView, LogoutView, MyTimetableView, OwnerViewSet, ParentListView, ReportCardExportView, ReportCardGenerationView, ReportCardSettingsView, ReportCardView, RoleChoicesView, SchoolClassViewSet, SchoolExpenseDetailView, SchoolExpenseListView, SchoolLevelViewSet, SchoolViewSet, StudentEnrollmentViewSet, SubjectCategoryViewSet, SubjectViewSet, TeacherViewSet, TimetableExportView, TimetableSetupView, TimetableValidationView, TimetableView, TuitionComplianceView, TuitionFeePlanDetailView, TuitionFeePlanListView, TuitionPaymentListView, UsernameSuggestionView
+from .views import AcademicSessionDetailView, AcademicSessionListView, AcademicYearViewSet, AnnouncementDetailView, AnnouncementListView, AssignmentSettingsView, AttendanceSessionListView, AttendanceSheetView, CarriedDebtListView, ConversationDetailView, ConversationListView, MessageRecipientsView, CustomUserViewSet, DisciplineRecordListView, EnrollmentNumberSuggestionView, ExpenseCategoryListView, GradeContextView, GradeSchemeSourceView, GradeSchemeView, GradeSheetView, LoginView, LogoutView, MySignatureView, MyTimetableView, OwnerViewSet, ParentListView, PromotionThresholdView, YearEndDecisionView, ReportCardExportView, ReportCardGenerationView, ReportCardSettingsView, ReportCardView, RoleChoicesView, SchoolClassViewSet, SchoolExpenseDetailView, SchoolExpenseListView, SchoolLevelViewSet, SchoolViewSet, StudentEnrollmentViewSet, StudentJourneyView, SubjectCategoryViewSet, SubjectViewSet, TeacherViewSet, TimetableExportView, TimetableSetupView, TimetableValidationView, TimetableView, TuitionComplianceView, TuitionFeePlanDetailView, TuitionFeePlanListView, TuitionPaymentListView, UsernameSuggestionView
 
 router = DefaultRouter()
 router.register("teachers", TeacherViewSet, basename="teacher")
@@ -15,6 +15,7 @@ urlpatterns = [
     path("auth/logout/", LogoutView.as_view(), name="logout"),
     path("usernames/suggest/", UsernameSuggestionView.as_view(), name="username-suggestion"),
     path("roles/", RoleChoicesView.as_view(), name="role-choices"),
+    path("me/signature/", MySignatureView.as_view(), name="my-signature"),
     path(
         "schools/<int:school_pk>/teachers/",
         TeacherViewSet.as_view({"get": "list", "post": "create"}),
@@ -62,6 +63,16 @@ urlpatterns = [
         AcademicYearViewSet.as_view({"post": "close"}),
         name="close-academic-year",
     ),
+    path(
+        "schools/<int:school_pk>/academic-years/<int:pk>/reopen/",
+        AcademicYearViewSet.as_view({"post": "reopen"}),
+        name="reopen-academic-year",
+    ),
+    path(
+        "schools/<int:school_pk>/academic-years/<int:pk>/closure-preview/",
+        AcademicYearViewSet.as_view({"get": "closure_preview"}),
+        name="academic-year-closure-preview",
+    ),
     path("schools/<int:school_pk>/academic-years/<int:year_pk>/sessions/", AcademicSessionListView.as_view(), name="academic-sessions"),
     path("schools/<int:school_pk>/academic-years/<int:year_pk>/sessions/<int:pk>/", AcademicSessionDetailView.as_view(), name="academic-session-detail"),
     path("schools/<int:school_pk>/academic-years/<int:year_pk>/sessions/<int:pk>/close/", AcademicSessionDetailView.as_view(), name="academic-session-close"),
@@ -69,6 +80,12 @@ urlpatterns = [
         "schools/<int:school_pk>/enrollments/",
         StudentEnrollmentViewSet.as_view({"get": "list", "post": "create"}),
         name="student-enrollments",
+    ),
+    path("schools/<int:school_pk>/students/journey/", StudentJourneyView.as_view(), name="student-journey"),
+    path(
+        "schools/<int:school_pk>/enrollments/assignment-settings/",
+        AssignmentSettingsView.as_view(),
+        name="assignment-settings",
     ),
     path(
         "schools/<int:school_pk>/enrollments/suggest-number/",
@@ -112,6 +129,7 @@ urlpatterns = [
     path("schools/<int:school_pk>/finance/tuition-plans/<int:pk>/copy/", TuitionFeePlanDetailView.as_view(), name="tuition-fee-plan-copy"),
     path("schools/<int:school_pk>/finance/payments/", TuitionPaymentListView.as_view(), name="tuition-payments"),
     path("schools/<int:school_pk>/finance/compliance/", TuitionComplianceView.as_view(), name="tuition-compliance"),
+    path("schools/<int:school_pk>/finance/carried-debts/", CarriedDebtListView.as_view(), name="carried-debts"),
     path("schools/<int:school_pk>/finance/expense-categories/", ExpenseCategoryListView.as_view(), name="expense-categories"),
     path("schools/<int:school_pk>/finance/expenses/", SchoolExpenseListView.as_view(), name="school-expenses"),
     path("schools/<int:school_pk>/finance/expenses/<int:pk>/", SchoolExpenseDetailView.as_view(), name="school-expense-detail"),
@@ -124,6 +142,7 @@ urlpatterns = [
     path("schools/<int:school_pk>/conversations/<int:pk>/", ConversationDetailView.as_view(), name="conversation-detail"),
     path("schools/<int:school_pk>/conversations/recipients/", MessageRecipientsView.as_view(), name="message-recipients"),
     path("schools/<int:school_pk>/grades/contexts/", GradeContextView.as_view(), name="grade-contexts"),
+    path("schools/<int:school_pk>/grades/scheme-sources/", GradeSchemeSourceView.as_view(), name="grade-scheme-sources"),
     path("schools/<int:school_pk>/grades/sessions/<int:session_pk>/scheme/", GradeSchemeView.as_view(), name="grade-scheme"),
     path("schools/<int:school_pk>/grades/sessions/<int:session_pk>/subjects/<int:class_subject_pk>/", GradeSheetView.as_view(), name="grade-sheet"),
     path("schools/<int:school_pk>/parents/", ParentListView.as_view(), name="school-parents"),
@@ -134,6 +153,8 @@ urlpatterns = [
     path("schools/<int:school_pk>/timetable/mine/", MyTimetableView.as_view(), name="school-timetable-mine"),
     path("schools/<int:school_pk>/report-cards/sessions/<int:session_pk>/classes/<int:class_pk>/", ReportCardView.as_view(), name="report-cards"),
     path("schools/<int:school_pk>/report-cards/settings/", ReportCardSettingsView.as_view(), name="report-card-settings"),
+    path("schools/<int:school_pk>/report-cards/promotion/", PromotionThresholdView.as_view(), name="promotion-thresholds"),
+    path("schools/<int:school_pk>/report-cards/sessions/<int:session_pk>/year-end/", YearEndDecisionView.as_view(), name="year-end-decisions"),
     path("schools/<int:school_pk>/report-cards/sessions/<int:session_pk>/generate/", ReportCardGenerationView.as_view(), name="report-card-generate"),
     path("schools/<int:school_pk>/report-cards/sessions/<int:session_pk>/export/", ReportCardExportView.as_view(), name="report-card-export"),
     *router.urls,

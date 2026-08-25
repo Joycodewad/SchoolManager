@@ -10,6 +10,7 @@ Le calcul suit toujours la même règle : moyenne de chaque matière ramenée su
 seuils d'appréciation qui se paramètrent, pas l'arithmétique.
 """
 
+import os
 from decimal import Decimal
 
 from django.db import transaction
@@ -17,12 +18,16 @@ from django.db import transaction
 from .models import (
     AcademicSession,
     ClassSubject,
+    CustomUser,
     GradeEntry,
+    GradeGroup,
+    GradeLine,
     GradeScheme,
     ReportCard,
     ReportCardAppreciation,
     ReportCardSettings,
     SchoolClass,
+    SchoolMembership,
     StudentEnrollment,
     SubjectCategoryOrder,
     TeacherAssignmentSubject,
@@ -47,6 +52,95 @@ def settings_for(school):
     """Paramétrage d'affichage, créé au premier accès."""
     configuration, _ = ReportCardSettings.objects.get_or_create(school=school)
     return configuration
+
+
+def signatories_for(school, configuration):
+    """Signataires du bas de page, dans l'ordre où ils s'impriment.
+
+    Le titre figure toujours sur la maquette ; c'est le nom qui se règle. On
+    va le chercher dans les rôles de l'établissement plutôt que de le faire
+    ressaisir : un changement de proviseur suit tout seul.
+
+    Un rôle vacant ne produit rien — pas de signature orpheline sur le
+    bulletin. Le proviseur passe en dernier : sa signature ferme la page, à
+    droite, sous le lieu et la date.
+    """
+    enabled = {
+        "censor": configuration.show_censor_name,
+        "founder": configuration.show_founder_name,
+        "principal": configuration.show_principal_name,
+    }
+    return [
+        row for row in role_holders(school)
+        if enabled[row["key"]] and row["name"]
+    ]
+
+
+# Qui signe quoi, dans l'ordre d'impression : le proviseur ferme la ligne.
+SIGNATORY_ROLES = [
+    ("censor", "Le Censeur", CustomUser.Role.CENSEUR),
+    ("founder", "Le Fondateur", None),
+    ("principal", "Le Proviseur", CustomUser.Role.PROVISEUR),
+]
+
+
+def role_holders(school):
+    """Qui occupe chaque rôle signataire, que le bulletin l'imprime ou non.
+
+    Le fondateur est le propriétaire de l'établissement ; censeur et proviseur
+    se lisent dans les rôles actifs. Un poste vacant rend un nom vide plutôt
+    que d'être omis : le paramétrage peut ainsi dire « aucun proviseur ».
+    """
+    holders = []
+    for key, title, role in SIGNATORY_ROLES:
+        if role is None:
+            holder = school.owner
+        else:
+            membership = (
+                SchoolMembership.objects
+                .filter(school=school, role=role, is_active=True)
+                .select_related("user")
+                .order_by("user__last_name", "user__first_name")
+                .first()
+            )
+            holder = membership.user if membership else None
+        holders.append({
+            "key": key,
+            "title": title,
+            "name": holder.get_full_name().strip() if holder else "",
+            # Chemin de la signature manuscrite, pour l'édition PDF. Le fichier
+            # peut avoir disparu du disque : on ne le retient que s'il est là.
+            "signature": signature_path(holder),
+        })
+    return holders
+
+
+def teacher_signatures_for(school_class):
+    """Signature de l'enseignant de chaque matière, par configuration de classe.
+
+    Résolue à l'édition et non figée dans le bulletin : un enseignant qui
+    enregistre sa signature la voit apparaître sur les bulletins déjà générés,
+    sans qu'il faille tout régénérer.
+    """
+    signatures = {}
+    for link in TeacherAssignmentSubject.objects.filter(
+        class_subject__school_class=school_class,
+    ).select_related("assignment__teacher"):
+        path = signature_path(link.assignment.teacher)
+        if path:
+            signatures[link.class_subject_id] = path
+    return signatures
+
+
+def signature_path(holder):
+    """Fichier de la signature manuscrite, s'il existe encore sur le disque."""
+    if holder is None or not holder.signature:
+        return ""
+    try:
+        path = holder.signature.path
+    except (NotImplementedError, ValueError):
+        return ""
+    return path if os.path.exists(path) else ""
 
 
 def category_order_for(school, school_class):
@@ -346,9 +440,8 @@ def term_history(session, school_class, enrollment_ids):
     """Résultats de chaque élève sur toutes les sessions déjà éditées.
 
     Retourne `(termes, resultats)` où `termes` décrit la séquence de la classe
-    — nom de la session, rang dans l'année, session courante ou non — et
-    `resultats` associe chaque élève aux moyennes et rangs de ses bulletins,
-    par session.
+    — nom de la session, session courante ou non — et `resultats` associe
+    chaque élève aux moyennes et rangs de ses bulletins, par session.
 
     Seules les sessions déjà passées et la session courante entrent dans la
     liste : un bulletin du premier trimestre n'annonce pas les trimestres à
@@ -364,19 +457,15 @@ def term_history(session, school_class, enrollment_ids):
     else:
         position = sequence.index(session)
 
-    # `total` compte la séquence entière : c'est lui qui dit si la session
-    # courante est la dernière de l'année, donc si la moyenne annuelle a un sens.
-    total = len(sequence)
     past = sequence[: position + 1]
 
     terms = [
         {
             "id": item.id,
             "name": item.name,
-            "order": index + 1,
             "is_current": item.id == session.id,
         }
-        for index, item in enumerate(past)
+        for item in past
     ]
 
     results = {enrollment_id: {} for enrollment_id in enrollment_ids}
@@ -391,12 +480,12 @@ def term_history(session, school_class, enrollment_ids):
 
     return {
         "terms": terms,
-        "total": total,
-        # Dernière session de l'année pour cette classe : c'est là, et là
-        # seulement, que la moyenne annuelle est calculée. Une classe qui n'a
-        # qu'une seule session en est exclue : la « moyenne annuelle » ne
-        # ferait que répéter la moyenne de la session, ligne pour ligne.
-        "is_final": total > 1 and position + 1 == total,
+        # Seule une session explicitement désignée comme dernière de l'année
+        # porte la moyenne annuelle. Être dernière au calendrier ne suffit
+        # pas : une session peut s'ajouter, et une moyenne « annuelle » sur
+        # une année incomplète induirait en erreur. Sans désignation, le
+        # bulletin se contente du rappel des sessions déjà éditées.
+        "is_final": session.is_final,
         "is_first": position == 0,
         "results": results,
     }
@@ -406,7 +495,7 @@ def student_history(history, enrollment_id):
     """Récapitulatif d'un élève, tel que le bulletin l'imprime.
 
     Reprend la séquence de la classe en y plaçant les résultats de cet élève,
-    et calcule la moyenne annuelle une fois la dernière session atteinte. Une
+    et calcule la moyenne annuelle sur la session désignée comme dernière. Une
     session où l'élève n'a pas de bulletin reste dans la liste, sans valeur :
     l'absence se lit alors sur le bulletin, elle n'est pas masquée.
     """
@@ -417,7 +506,6 @@ def student_history(history, enrollment_id):
     ]
     return {
         "terms": terms,
-        "total": history["total"],
         "is_final": history["is_final"],
         "is_first": history["is_first"],
         "annual_average": annual_average(terms) if history["is_final"] else None,
@@ -440,6 +528,54 @@ def annual_average(entries):
     return str((sum(averages) / len(averages)).quantize(CENTS))
 
 
+def promotion_decision(level, annual_average_value, exam_average_value, gender=""):
+    """Décision de fin d'année d'un élève, telle qu'elle s'imprime.
+
+    Deux régimes. Sur un niveau ordinaire, c'est la moyenne annuelle comparée
+    au seuil du niveau qui fait passer. Sur un niveau d'examen — CM2, 3ème,
+    Première, Terminale — la moyenne annuelle ne décide de rien : seul compte
+    le résultat de l'examen officiel, qui tombe après le conseil de classe.
+
+    `gender` accorde la mention à l'élève : « Admise » pour une fille. On
+    accepte aussi bien le code enregistré (« F ») que son libellé
+    (« Féminin »), pour les bulletins figés avant ce point.
+
+    Retourne `None` tant que la décision n'est pas connue : moyenne annuelle
+    absente, ou résultat d'examen pas encore saisi. Le bulletin laisse alors
+    la case du conseil de classe libre plutôt que d'annoncer un redoublement
+    faute de données.
+    """
+    threshold = Decimal(str(level.passing_average))
+    feminine = str(gender).strip().upper().startswith("F")
+    admitted = "Admise" if feminine else "Admis"
+
+    if level.is_exam_level:
+        if exam_average_value is None:
+            return None
+        exam = Decimal(str(exam_average_value))
+        passed = exam >= threshold
+        label = f"{admitted} au {level.exam_name}" if level.exam_name else f"{admitted} à l'examen"
+        return {
+            "passed": passed,
+            "label": label if passed else ("Échouée à l'examen" if feminine else "Échoué à l'examen"),
+            "basis": "examen",
+            "value": str(exam.quantize(CENTS)),
+            "threshold": str(threshold.quantize(CENTS)),
+        }
+
+    if annual_average_value is None:
+        return None
+    average = Decimal(str(annual_average_value))
+    return {
+        "passed": average >= threshold,
+        # « Redouble » est un verbe : il ne s'accorde pas.
+        "label": f"{admitted} en classe supérieure" if average >= threshold else "Redouble",
+        "basis": "moyenne annuelle",
+        "value": str(average.quantize(CENTS)),
+        "threshold": str(threshold.quantize(CENTS)),
+    }
+
+
 def scheme_for(session):
     return (
         GradeScheme.objects
@@ -449,13 +585,74 @@ def scheme_for(session):
     )
 
 
+class SchemeCopyError(Exception):
+    """Copie impossible : source ou destination inadaptée."""
+
+
 @transaction.atomic
-def generate_class(session, school_class, user=None, enrollment_ids=None):
+def copy_scheme(source_session, target_session, user=None):
+    """Recopie le barème d'une session vers une autre.
+
+    Configurer les mêmes lignes à chaque trimestre est fastidieux et source
+    d'écarts involontaires : cette copie reprend le mode de calcul, les groupes
+    et les lignes à l'identique. Les notes ne suivent pas — seule la structure
+    est copiée, la session de destination repart vierge.
+    """
+    if source_session.pk == target_session.pk:
+        raise SchemeCopyError("La session source et la session de destination sont identiques.")
+
+    source = scheme_for(source_session)
+    if source is None:
+        raise SchemeCopyError(
+            f"La session « {source_session.name} » n'a pas de configuration à copier."
+        )
+    if target_session.is_closed:
+        raise SchemeCopyError(
+            f"La session « {target_session.name} » est clôturée : sa configuration est figée."
+        )
+
+    existing = scheme_for(target_session)
+    if existing is not None and GradeEntry.objects.filter(line__scheme=existing).exists():
+        raise SchemeCopyError(
+            "Des notes ont déjà été saisies dans cette session : sa configuration "
+            "ne peut plus être remplacée."
+        )
+    if existing is not None:
+        existing.delete()
+
+    target = GradeScheme.objects.create(
+        session=target_session,
+        calculation_method=source.calculation_method,
+        created_by=user,
+    )
+    # Les groupes d'abord : les lignes s'y rattachent.
+    group_map = {}
+    for group in source.groups.all():
+        group_map[group.pk] = GradeGroup.objects.create(
+            scheme=target, name=group.name, weight=group.weight, order=group.order,
+        )
+    for line in source.lines.all():
+        GradeLine.objects.create(
+            scheme=target,
+            group=group_map.get(line.group_id),
+            name=line.name,
+            weight=line.weight,
+            max_score=line.max_score,
+            order=line.order,
+        )
+    return target
+
+
+@transaction.atomic
+def generate_class(session, school_class, user=None, enrollment_ids=None, issued_on=None):
     """Fige les bulletins d'une classe.
 
     `enrollment_ids` restreint l'écriture à quelques élèves — le calcul, lui,
     porte toujours sur la classe entière, sans quoi le rang et les statistiques
     seraient faux.
+
+    `issued_on` est la date d'établissement imprimée au pied du bulletin,
+    choisie par la direction au moment de générer.
     """
     scheme = scheme_for(session)
     if scheme is None:
@@ -483,6 +680,7 @@ def generate_class(session, school_class, user=None, enrollment_ids=None):
                     if student["general_average"] is not None else None
                 ),
                 "rank": student["rank"],
+                "issued_on": issued_on,
                 "generated_by": user,
             },
         )
@@ -490,7 +688,7 @@ def generate_class(session, school_class, user=None, enrollment_ids=None):
     return written
 
 
-def generate_school(session, school, user=None):
+def generate_school(session, school, user=None, issued_on=None):
     """Fige les bulletins de toutes les classes rattachées à la session."""
     classes = SchoolClass.objects.filter(
         academic_sessions=session, school=school,
@@ -498,5 +696,5 @@ def generate_school(session, school, user=None):
 
     total = 0
     for school_class in classes:
-        total += generate_class(session, school_class, user=user)
+        total += generate_class(session, school_class, user=user, issued_on=issued_on)
     return total, classes.count()
